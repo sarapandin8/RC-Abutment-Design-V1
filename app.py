@@ -837,26 +837,74 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
     x = check.width_x_mm / 2.0
     y = check.depth_y_mm / 2.0
     _add_rect(fig, x0=-x, x1=x, y0=-y, y1=y, fillcolor="#f8fafc", linecolor=COLORS["concrete_line"])
-    marker_size = max(5, min(10, check.bar_dia_mm * 0.28))
+
+    display_offset = min(
+        max(2.0 * (check.bar_dia_mm + min(check.clear_spacing_x_mm, check.clear_spacing_y_mm) * 0.05), 90.0),
+        max(90.0, min(check.width_x_mm, check.depth_y_mm) * 0.22),
+    )
+    if check.width_x_mm > 2.0 * display_offset and check.depth_y_mm > 2.0 * display_offset:
+        sx = (check.width_x_mm - 2.0 * display_offset) / check.width_x_mm
+        sy = (check.depth_y_mm - 2.0 * display_offset) / check.depth_y_mm
+    else:
+        sx = sy = 1.0
+
+    top_bottom_bars: list[Bar] = []
+    side_bars: list[Bar] = []
+    corner_tol = 1e-6
+    for bar in check.bars:
+        plotted = Bar(x_mm=bar.x_mm * sx, y_mm=bar.y_mm * sy, area_mm2=bar.area_mm2)
+        is_top_bottom = abs(abs(bar.y_mm) - max(abs(b.y_mm) for b in check.bars)) <= corner_tol
+        if is_top_bottom:
+            top_bottom_bars.append(plotted)
+        else:
+            side_bars.append(plotted)
+
+    marker_size = max(2.0, min(3.4, check.bar_dia_mm * 0.09))
+    common_hover = "DB%{customdata[0]:.0f}<br>x=%{customdata[1]:.0f} mm<br>y=%{customdata[2]:.0f} mm<extra></extra>"
     fig.add_trace(
         go.Scatter(
-            x=[bar.x_mm for bar in check.bars],
-            y=[bar.y_mm for bar in check.bars],
+            x=[bar.x_mm for bar in top_bottom_bars],
+            y=[bar.y_mm for bar in top_bottom_bars],
             mode="markers",
+            name="top/bottom bars",
             marker={
                 "size": marker_size,
-                "color": "#f97316",
-                "line": {"color": "#7c2d12", "width": 1.4},
+                "color": "#2563eb",
+                "line": {"color": "#1e3a8a", "width": 1.0},
                 "opacity": 1.0,
             },
-            hovertemplate="DB%{customdata[0]:.0f}<br>x=%{x:.0f} mm<br>y=%{y:.0f} mm<extra></extra>",
-            customdata=[[check.bar_dia_mm] for _ in check.bars],
+            hovertemplate=common_hover,
+            customdata=[
+                [check.bar_dia_mm, original.x_mm, original.y_mm]
+                for original in check.bars
+                if abs(abs(original.y_mm) - max(abs(b.y_mm) for b in check.bars)) <= corner_tol
+            ],
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[bar.x_mm for bar in side_bars],
+            y=[bar.y_mm for bar in side_bars],
+            mode="markers",
+            name="left/right bars",
+            marker={
+                "size": marker_size,
+                "color": "#dc2626",
+                "line": {"color": "#7f1d1d", "width": 1.0},
+                "opacity": 1.0,
+            },
+            hovertemplate=common_hover,
+            customdata=[
+                [check.bar_dia_mm, original.x_mm, original.y_mm]
+                for original in check.bars
+                if abs(abs(original.y_mm) - max(abs(b.y_mm) for b in check.bars)) > corner_tol
+            ],
         )
     )
     label = (
         f"Top/bottom faces: {check.bars_x_face} {rebar_label(check.bar_dia_mm)} each<br>"
         f"Left/right faces: {check.bars_y_face} {rebar_label(check.bar_dia_mm)} each<br>"
-        f"Total: {check.bar_count} bars, fy = {check.fy_mpa:.0f} MPa<br>"
+        f"Total: {check.bar_count} bars, fy = {check.fy_mpa:.0f} MPa, rho = {check.rho_percent:.3f}%<br>"
         f"Clear spacing: x-face {check.clear_spacing_x_mm:.0f} mm, y-face {check.clear_spacing_y_mm:.0f} mm"
     )
     fig.add_annotation(
@@ -884,6 +932,7 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
     fig.update_xaxes(range=[-x - pad, x + pad])
     fig.update_yaxes(range=[-y - axis_gap - 220.0, y + pad * 1.65])
     fig = _finish_view(fig, "Base section reinforcement", "x (mm)", "y (mm)")
+    fig.update_layout(showlegend=True, legend={"orientation": "h", "y": 1.02, "x": 0.52, "xanchor": "center"})
     fig.update_xaxes(zeroline=False)
     fig.update_yaxes(zeroline=False)
     return fig
