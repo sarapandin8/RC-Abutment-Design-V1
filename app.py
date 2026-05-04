@@ -1,33 +1,818 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
-import sys
+from dataclasses import dataclass, replace
+import math
+from typing import Iterable, Literal
 
+import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+Axis = Literal["x", "y"]
 
-from abutment_uls import (  # noqa: E402
-    CodeParameters,
-    analyze_section,
-    combine_bearing_loads,
-    default_code_parameters,
-    find_reinforcement,
-)
-from abutment_uls.plots import (  # noqa: E402
-    front_view,
-    interaction_plot,
-    load_vector_plot,
-    plan_view,
-    reinforcement_plan,
-    side_view,
-)
+
+@dataclass(frozen=True)
+class BearingResultant:
+    pu_kn: float
+    vx_kn: float
+    vy_kn: float
+    mux_knm: float
+    muy_knm: float
+    torsion_z_knm: float
+
+    @property
+    def design_mux_knm(self) -> float:
+        return abs(self.mux_knm)
+
+    @property
+    def design_muy_knm(self) -> float:
+        return abs(self.muy_knm)
+
+
+@dataclass(frozen=True)
+class CodeParameters:
+    name: str
+    phi_compression: float
+    phi_flexure: float
+    phi_method: Literal["strain", "aashto_axial"]
+    axial_cap_factor: float
+    eps_cu: float = 0.003
+
+
+@dataclass(frozen=True)
+class Bar:
+    x_mm: float
+    y_mm: float
+    area_mm2: float
+
+
+@dataclass(frozen=True)
+class SectionCheck:
+    width_x_mm: float
+    depth_y_mm: float
+    as_total_mm2: float
+    rho_percent: float
+    bar_count: int
+    bar_dia_mm: float
+    bars_x_face: int
+    bars_y_face: int
+    phi_pmax_kn: float
+    phi_mnx_at_pu_knm: float
+    phi_mny_at_pu_knm: float
+    axial_ratio: float
+    mux_ratio: float
+    muy_ratio: float
+    biaxial_ratio: float
+    governing_ratio: float
+    status: str
+    curve_x: list[dict[str, float]]
+    curve_y: list[dict[str, float]]
+    bars: list[Bar]
+
+
+def default_code_parameters(code_name: str) -> CodeParameters:
+    if "AASHTO" in code_name.upper():
+        return CodeParameters(
+            name="AASHTO LRFD style",
+            phi_compression=0.75,
+            phi_flexure=0.90,
+            phi_method="aashto_axial",
+            axial_cap_factor=1.00,
+        )
+    return CodeParameters(
+        name="ACI 318 style",
+        phi_compression=0.65,
+        phi_flexure=0.90,
+        phi_method="strain",
+        axial_cap_factor=0.80,
+    )
+
+
+def beta1_aci(fc_mpa: float) -> float:
+    if fc_mpa <= 28.0:
+        return 0.85
+    return max(0.65, 0.85 - 0.05 * ((fc_mpa - 28.0) / 7.0))
+
+
+def bar_area_mm2(diameter_mm: float) -> float:
+    return math.pi * diameter_mm**2 / 4.0
+
+
+def combine_bearing_loads(records: Iterable[dict]) -> BearingResultant:
+    pu = vx = vy = mux = muy = torsion = 0.0
+    for row in records:
+        x = float(row.get("x_mm", 0.0))
+        y = float(row.get("y_mm", 0.0))
+        z = float(row.get("z_mm", 0.0))
+        px = float(row.get("Pu_x_kN", 0.0))
+        py = float(row.get("Pu_y_kN", 0.0))
+        pz = float(row.get("Pu_z_kN", 0.0))
+        mx = float(row.get("Mu_x_kNm", 0.0))
+        my = float(row.get("Mu_y_kNm", 0.0))
+
+        pu += pz
+        vx += px
+        vy += py
+        mux += mx + (-y * pz - z * py) / 1000.0
+        muy += my + (z * px + x * pz) / 1000.0
+        torsion += (x * py - y * px) / 1000.0
+
+    return BearingResultant(
+        pu_kn=pu,
+        vx_kn=vx,
+        vy_kn=vy,
+        mux_knm=mux,
+        muy_knm=muy,
+        torsion_z_knm=torsion,
+    )
+
+
+def make_perimeter_bars(
+    width_x_mm: float,
+    depth_y_mm: float,
+    cover_mm: float,
+    bar_dia_mm: float,
+    bars_x_face: int,
+    bars_y_face: int,
+) -> list[Bar]:
+    if bars_x_face < 2:
+        raise ValueError("bars_x_face must be at least 2.")
+    if bars_y_face < 2:
+        raise ValueError("bars_y_face must be at least 2.")
+
+    edge_x = width_x_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    edge_y = depth_y_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    if edge_x <= 0 or edge_y <= 0:
+        raise ValueError("Cover and bar diameter do not fit inside the section.")
+
+    area = bar_area_mm2(bar_dia_mm)
+    points: list[tuple[float, float]] = []
+    for x in np.linspace(-edge_x, edge_x, bars_x_face):
+        points.append((float(x), edge_y))
+        points.append((float(x), -edge_y))
+    y_values = np.linspace(-edge_y, edge_y, bars_y_face)
+    for y in y_values[1:-1]:
+        points.append((-edge_x, float(y)))
+        points.append((edge_x, float(y)))
+
+    deduped: dict[tuple[int, int], Bar] = {}
+    for x, y in points:
+        deduped[(round(x), round(y))] = Bar(x_mm=x, y_mm=y, area_mm2=area)
+    return list(deduped.values())
+
+
+def _rectangle_polygon(width_x_mm: float, depth_y_mm: float) -> list[tuple[float, float]]:
+    x = width_x_mm / 2.0
+    y = depth_y_mm / 2.0
+    return [(-x, -y), (x, -y), (x, y), (-x, y)]
+
+
+def _clip_polygon_ge(
+    polygon: list[tuple[float, float]],
+    normal: tuple[float, float],
+    threshold: float,
+) -> list[tuple[float, float]]:
+    if not polygon:
+        return []
+
+    nx, ny = normal
+
+    def value(point: tuple[float, float]) -> float:
+        return point[0] * nx + point[1] * ny
+
+    def inside(point: tuple[float, float]) -> bool:
+        return value(point) >= threshold - 1e-9
+
+    output: list[tuple[float, float]] = []
+    previous = polygon[-1]
+    previous_inside = inside(previous)
+    previous_value = value(previous)
+
+    for current in polygon:
+        current_inside = inside(current)
+        current_value = value(current)
+        if current_inside != previous_inside:
+            denom = current_value - previous_value
+            if abs(denom) > 1e-12:
+                t = (threshold - previous_value) / denom
+                ix = previous[0] + t * (current[0] - previous[0])
+                iy = previous[1] + t * (current[1] - previous[1])
+                output.append((ix, iy))
+        if current_inside:
+            output.append(current)
+        previous = current
+        previous_inside = current_inside
+        previous_value = current_value
+
+    return output
+
+
+def _polygon_area_centroid(polygon: list[tuple[float, float]]) -> tuple[float, float, float]:
+    if len(polygon) < 3:
+        return 0.0, 0.0, 0.0
+
+    twice_area = 0.0
+    cx_term = 0.0
+    cy_term = 0.0
+    for index, (x0, y0) in enumerate(polygon):
+        x1, y1 = polygon[(index + 1) % len(polygon)]
+        cross = x0 * y1 - x1 * y0
+        twice_area += cross
+        cx_term += (x0 + x1) * cross
+        cy_term += (y0 + y1) * cross
+
+    area = twice_area / 2.0
+    if abs(area) < 1e-9:
+        return 0.0, 0.0, 0.0
+    cx = cx_term / (6.0 * area)
+    cy = cy_term / (6.0 * area)
+    return abs(area), cx, cy
+
+
+def _steel_stress_mpa(strain: float, fy_mpa: float, es_mpa: float) -> float:
+    return max(-fy_mpa, min(fy_mpa, es_mpa * strain))
+
+
+def _phi_factor(
+    eps_t: float,
+    eps_y: float,
+    pn_n: float,
+    fc_mpa: float,
+    ag_mm2: float,
+    params: CodeParameters,
+) -> float:
+    if params.phi_method == "aashto_axial":
+        if pn_n <= 0:
+            return params.phi_flexure
+        threshold_n = max(1.0, 0.10 * fc_mpa * ag_mm2)
+        ratio = min(1.0, max(0.0, pn_n / threshold_n))
+        return params.phi_flexure - (params.phi_flexure - params.phi_compression) * ratio
+
+    if eps_t <= eps_y:
+        return params.phi_compression
+    if eps_t >= eps_y + 0.003:
+        return params.phi_flexure
+    ratio = (eps_t - eps_y) / 0.003
+    return params.phi_compression + (params.phi_flexure - params.phi_compression) * ratio
+
+
+def _section_response(
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    bars: list[Bar],
+    fc_mpa: float,
+    fy_mpa: float,
+    es_mpa: float,
+    c_mm: float,
+    theta_rad: float,
+    params: CodeParameters,
+) -> dict[str, float]:
+    beta1 = beta1_aci(fc_mpa)
+    normal = (math.cos(theta_rad), math.sin(theta_rad))
+    polygon = _rectangle_polygon(width_x_mm, depth_y_mm)
+    pmax = max(x * normal[0] + y * normal[1] for x, y in polygon)
+    threshold = pmax - beta1 * c_mm
+    compression_polygon = _clip_polygon_ge(polygon, normal, threshold)
+    concrete_area, cx, cy = _polygon_area_centroid(compression_polygon)
+
+    pn_n = 0.85 * fc_mpa * concrete_area
+    mx_nmm = pn_n * cy
+    my_nmm = -pn_n * cx
+    min_strain = params.eps_cu
+
+    for bar in bars:
+        projection = bar.x_mm * normal[0] + bar.y_mm * normal[1]
+        distance_from_compression_edge = pmax - projection
+        strain = params.eps_cu * (1.0 - distance_from_compression_edge / c_mm)
+        stress = _steel_stress_mpa(strain, fy_mpa, es_mpa)
+        force_n = stress * bar.area_mm2
+        pn_n += force_n
+        mx_nmm += force_n * bar.y_mm
+        my_nmm += -force_n * bar.x_mm
+        min_strain = min(min_strain, strain)
+
+    eps_t = max(0.0, -min_strain)
+    phi = _phi_factor(
+        eps_t=eps_t,
+        eps_y=fy_mpa / es_mpa,
+        pn_n=pn_n,
+        fc_mpa=fc_mpa,
+        ag_mm2=width_x_mm * depth_y_mm,
+        params=params,
+    )
+    return {
+        "pn_kn": pn_n / 1000.0,
+        "mx_knm": mx_nmm / 1_000_000.0,
+        "my_knm": my_nmm / 1_000_000.0,
+        "eps_t": eps_t,
+        "phi": phi,
+        "phi_pn_kn": phi * pn_n / 1000.0,
+        "phi_mx_knm": phi * mx_nmm / 1_000_000.0,
+        "phi_my_knm": phi * my_nmm / 1_000_000.0,
+    }
+
+
+def _phi_pmax_kn(
+    width_x_mm: float,
+    depth_y_mm: float,
+    bars: list[Bar],
+    fc_mpa: float,
+    fy_mpa: float,
+    params: CodeParameters,
+) -> float:
+    ag = width_x_mm * depth_y_mm
+    ast = sum(bar.area_mm2 for bar in bars)
+    po_n = 0.85 * fc_mpa * max(0.0, ag - ast) + fy_mpa * ast
+    return params.axial_cap_factor * params.phi_compression * po_n / 1000.0
+
+
+def interaction_curve(
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    bars: list[Bar],
+    fc_mpa: float,
+    fy_mpa: float,
+    es_mpa: float,
+    params: CodeParameters,
+    axis: Axis,
+    sample_count: int = 180,
+) -> list[dict[str, float]]:
+    theta = math.pi / 2.0 if axis == "x" else math.pi
+    max_dim = max(width_x_mm, depth_y_mm)
+    c_values = np.geomspace(max(1.0, max_dim / 1000.0), max_dim * 80.0, sample_count)
+    pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
+
+    curve: list[dict[str, float]] = []
+    for c_mm in c_values:
+        response = _section_response(
+            width_x_mm=width_x_mm,
+            depth_y_mm=depth_y_mm,
+            bars=bars,
+            fc_mpa=fc_mpa,
+            fy_mpa=fy_mpa,
+            es_mpa=es_mpa,
+            c_mm=float(c_mm),
+            theta_rad=theta,
+            params=params,
+        )
+        phi_pn = min(response["phi_pn_kn"], pmax)
+        moment_key = "phi_mx_knm" if axis == "x" else "phi_my_knm"
+        curve.append(
+            {
+                "phi_pn_kn": phi_pn,
+                "phi_mn_knm": abs(response[moment_key]),
+                "phi": response["phi"],
+                "eps_t": response["eps_t"],
+            }
+        )
+
+    curve.append({"phi_pn_kn": pmax, "phi_mn_knm": 0.0, "phi": params.phi_compression, "eps_t": 0.0})
+    return curve
+
+
+def _capacity_at_pu(curve: list[dict[str, float]], pu_kn: float) -> float:
+    by_p: dict[float, float] = {}
+    for point in curve:
+        p = round(point["phi_pn_kn"], 6)
+        m = point["phi_mn_knm"]
+        by_p[p] = max(by_p.get(p, 0.0), m)
+
+    p_values = np.array(sorted(by_p.keys()), dtype=float)
+    m_values = np.array([by_p[p] for p in p_values], dtype=float)
+    if len(p_values) < 2:
+        return 0.0
+    if pu_kn > float(p_values.max()):
+        return 0.0
+    if pu_kn < float(p_values.min()):
+        return float(m_values[0])
+    return float(np.interp(pu_kn, p_values, m_values))
+
+
+def analyze_section(
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    cover_mm: float,
+    bar_dia_mm: float,
+    bars_x_face: int,
+    bars_y_face: int,
+    fc_mpa: float,
+    fy_mpa: float,
+    es_mpa: float,
+    pu_kn: float,
+    mux_knm: float,
+    muy_knm: float,
+    params: CodeParameters,
+    sample_count: int = 180,
+) -> SectionCheck:
+    bars = make_perimeter_bars(
+        width_x_mm=width_x_mm,
+        depth_y_mm=depth_y_mm,
+        cover_mm=cover_mm,
+        bar_dia_mm=bar_dia_mm,
+        bars_x_face=bars_x_face,
+        bars_y_face=bars_y_face,
+    )
+    as_total = sum(bar.area_mm2 for bar in bars)
+    ag = width_x_mm * depth_y_mm
+    rho = as_total / ag * 100.0
+    pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
+    curve_x = interaction_curve(
+        width_x_mm=width_x_mm,
+        depth_y_mm=depth_y_mm,
+        bars=bars,
+        fc_mpa=fc_mpa,
+        fy_mpa=fy_mpa,
+        es_mpa=es_mpa,
+        params=params,
+        axis="x",
+        sample_count=sample_count,
+    )
+    curve_y = interaction_curve(
+        width_x_mm=width_x_mm,
+        depth_y_mm=depth_y_mm,
+        bars=bars,
+        fc_mpa=fc_mpa,
+        fy_mpa=fy_mpa,
+        es_mpa=es_mpa,
+        params=params,
+        axis="y",
+        sample_count=sample_count,
+    )
+    cap_x = _capacity_at_pu(curve_x, pu_kn)
+    cap_y = _capacity_at_pu(curve_y, pu_kn)
+    axial_ratio = pu_kn / pmax if pmax > 0 else math.inf
+    mux_ratio = abs(mux_knm) / cap_x if cap_x > 0 else math.inf
+    muy_ratio = abs(muy_knm) / cap_y if cap_y > 0 else math.inf
+    biaxial_ratio = mux_ratio + muy_ratio
+    governing_ratio = max(axial_ratio, biaxial_ratio)
+    status = "OK" if governing_ratio <= 1.0 else "NG"
+
+    return SectionCheck(
+        width_x_mm=width_x_mm,
+        depth_y_mm=depth_y_mm,
+        as_total_mm2=as_total,
+        rho_percent=rho,
+        bar_count=len(bars),
+        bar_dia_mm=bar_dia_mm,
+        bars_x_face=bars_x_face,
+        bars_y_face=bars_y_face,
+        phi_pmax_kn=pmax,
+        phi_mnx_at_pu_knm=cap_x,
+        phi_mny_at_pu_knm=cap_y,
+        axial_ratio=axial_ratio,
+        mux_ratio=mux_ratio,
+        muy_ratio=muy_ratio,
+        biaxial_ratio=biaxial_ratio,
+        governing_ratio=governing_ratio,
+        status=status,
+        curve_x=curve_x,
+        curve_y=curve_y,
+        bars=bars,
+    )
+
+
+def find_reinforcement(
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    cover_mm: float,
+    bar_dia_options_mm: Iterable[float],
+    fc_mpa: float,
+    fy_mpa: float,
+    es_mpa: float,
+    pu_kn: float,
+    mux_knm: float,
+    muy_knm: float,
+    params: CodeParameters,
+    rho_min_percent: float,
+    rho_max_percent: float,
+    max_bars_x_face: int = 28,
+    max_bars_y_face: int = 18,
+    sample_count: int = 120,
+) -> SectionCheck | None:
+    candidates: list[tuple[float, float, int, int]] = []
+    ag = width_x_mm * depth_y_mm
+    for dia in bar_dia_options_mm:
+        area = bar_area_mm2(dia)
+        for nx in range(2, max_bars_x_face + 1):
+            for ny in range(2, max_bars_y_face + 1):
+                bar_count = 2 * nx + 2 * max(0, ny - 2)
+                as_total = bar_count * area
+                rho = as_total / ag * 100.0
+                if rho_min_percent <= rho <= rho_max_percent:
+                    candidates.append((as_total, dia, nx, ny))
+
+    for _, dia, nx, ny in sorted(candidates, key=lambda item: item[0]):
+        try:
+            check = analyze_section(
+                width_x_mm=width_x_mm,
+                depth_y_mm=depth_y_mm,
+                cover_mm=cover_mm,
+                bar_dia_mm=dia,
+                bars_x_face=nx,
+                bars_y_face=ny,
+                fc_mpa=fc_mpa,
+                fy_mpa=fy_mpa,
+                es_mpa=es_mpa,
+                pu_kn=pu_kn,
+                mux_knm=mux_knm,
+                muy_knm=muy_knm,
+                params=params,
+                sample_count=sample_count,
+            )
+        except ValueError:
+            continue
+        if check.status == "OK":
+            return check
+    return None
+
+
+COLORS = {
+    "concrete": "#d6dee6",
+    "concrete_line": "#44515f",
+    "pilecap": "#eef2f6",
+    "pilecap_line": "#8792a2",
+    "bearing": "#13a39a",
+    "steel": "#c2410c",
+    "axis_x": "#1d4ed8",
+    "axis_y": "#be123c",
+    "axis_z": "#15803d",
+    "grid": "#e5e7eb",
+}
+
+
+def _add_rect(
+    fig: go.Figure,
+    *,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    fillcolor: str,
+    linecolor: str,
+    dash: str | None = None,
+    opacity: float = 1.0,
+) -> None:
+    fig.add_shape(
+        type="rect",
+        x0=x0,
+        x1=x1,
+        y0=y0,
+        y1=y1,
+        fillcolor=fillcolor,
+        line={"color": linecolor, "width": 2, **({"dash": dash} if dash else {})},
+        opacity=opacity,
+    )
+
+
+def _add_axis_arrow(
+    fig: go.Figure,
+    *,
+    x: float,
+    y: float,
+    dx: float,
+    dy: float,
+    label: str,
+    color: str,
+) -> None:
+    fig.add_annotation(
+        x=x + dx,
+        y=y + dy,
+        ax=x,
+        ay=y,
+        xref="x",
+        yref="y",
+        axref="x",
+        ayref="y",
+        text=label,
+        showarrow=True,
+        arrowhead=3,
+        arrowsize=1.2,
+        arrowwidth=2,
+        arrowcolor=color,
+        font={"color": color, "size": 13},
+        bgcolor="rgba(255,255,255,0.75)",
+        borderpad=2,
+    )
+
+
+def _finish_view(fig: go.Figure, title: str, x_title: str, y_title: str) -> go.Figure:
+    fig.update_layout(
+        title={"text": title, "x": 0.02, "xanchor": "left"},
+        height=480,
+        margin={"l": 24, "r": 24, "t": 54, "b": 24},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        showlegend=False,
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+    )
+    fig.update_xaxes(
+        title=x_title,
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        zeroline=True,
+        zerolinecolor="#111827",
+        zerolinewidth=1,
+    )
+    fig.update_yaxes(
+        title=y_title,
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        zeroline=True,
+        zerolinecolor="#111827",
+        zerolinewidth=1,
+        scaleanchor="x",
+        scaleratio=1,
+    )
+    return fig
+
+
+def plan_view(
+    bearings: Iterable[dict],
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    pilecap_overhang_mm: float,
+    bearing_size_mm: float,
+) -> go.Figure:
+    fig = go.Figure()
+    pile_x = width_x_mm / 2.0 + pilecap_overhang_mm
+    pile_y = depth_y_mm / 2.0 + pilecap_overhang_mm
+    abut_x = width_x_mm / 2.0
+    abut_y = depth_y_mm / 2.0
+
+    _add_rect(fig, x0=-pile_x, x1=pile_x, y0=-pile_y, y1=pile_y, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
+    _add_rect(fig, x0=-abut_x, x1=abut_x, y0=-abut_y, y1=abut_y, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
+
+    half = bearing_size_mm / 2.0
+    for row in bearings:
+        x = float(row.get("x_mm", 0.0))
+        y = float(row.get("y_mm", 0.0))
+        name = str(row.get("name", "B"))
+        _add_rect(fig, x0=x - half, x1=x + half, y0=y - half, y1=y + half, fillcolor=COLORS["bearing"], linecolor="#065f5b", opacity=0.95)
+        fig.add_annotation(x=x, y=y, text=name, showarrow=False, font={"color": "white", "size": 11})
+
+    axis_origin_x = -pile_x * 0.86
+    axis_origin_y = -pile_y * 0.86
+    arrow = max(width_x_mm, depth_y_mm) * 0.22
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow, label="+y", color=COLORS["axis_y"])
+
+    pad = max(width_x_mm, depth_y_mm) * 0.12
+    fig.update_xaxes(range=[-pile_x - pad, pile_x + pad])
+    fig.update_yaxes(range=[-pile_y - pad, pile_y + pad])
+    return _finish_view(fig, "Section plan at bearing level", "x (mm)", "y (mm)")
+
+
+def front_view(
+    bearings: Iterable[dict],
+    *,
+    width_x_mm: float,
+    height_z_mm: float,
+    pilecap_overhang_mm: float,
+    pilecap_thickness_mm: float,
+    bearing_size_mm: float,
+) -> go.Figure:
+    fig = go.Figure()
+    pile_x = width_x_mm / 2.0 + pilecap_overhang_mm
+    abut_x = width_x_mm / 2.0
+    half = bearing_size_mm / 2.0
+    bearing_h = max(80.0, bearing_size_mm * 0.28)
+
+    _add_rect(fig, x0=-pile_x, x1=pile_x, y0=-pilecap_thickness_mm, y1=0, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
+    _add_rect(fig, x0=-abut_x, x1=abut_x, y0=0, y1=height_z_mm, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
+
+    for row in bearings:
+        x = float(row.get("x_mm", 0.0))
+        z = float(row.get("z_mm", height_z_mm))
+        name = str(row.get("name", "B"))
+        _add_rect(fig, x0=x - half, x1=x + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
+        fig.add_annotation(x=x, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
+
+    axis_origin_x = -pile_x * 0.86
+    axis_origin_z = -pilecap_thickness_mm * 0.72
+    arrow = max(width_x_mm, height_z_mm) * 0.16
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=0, dy=arrow, label="+z", color=COLORS["axis_z"])
+
+    pad = max(width_x_mm, height_z_mm) * 0.10
+    fig.update_xaxes(range=[-pile_x - pad, pile_x + pad])
+    fig.update_yaxes(range=[-pilecap_thickness_mm - pad * 0.35, height_z_mm + bearing_h + pad * 0.35])
+    return _finish_view(fig, "Front view", "x (mm)", "z (mm)")
+
+
+def side_view(
+    bearings: Iterable[dict],
+    *,
+    depth_y_mm: float,
+    height_z_mm: float,
+    pilecap_overhang_mm: float,
+    pilecap_thickness_mm: float,
+    bearing_size_mm: float,
+) -> go.Figure:
+    fig = go.Figure()
+    pile_y = depth_y_mm / 2.0 + pilecap_overhang_mm
+    abut_y = depth_y_mm / 2.0
+    half = bearing_size_mm / 2.0
+    bearing_h = max(80.0, bearing_size_mm * 0.28)
+
+    _add_rect(fig, x0=-pile_y, x1=pile_y, y0=-pilecap_thickness_mm, y1=0, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
+    _add_rect(fig, x0=-abut_y, x1=abut_y, y0=0, y1=height_z_mm, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
+
+    for row in bearings:
+        y = float(row.get("y_mm", 0.0))
+        z = float(row.get("z_mm", height_z_mm))
+        name = str(row.get("name", "B"))
+        _add_rect(fig, x0=y - half, x1=y + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
+        fig.add_annotation(x=y, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
+
+    axis_origin_y = -pile_y * 0.86
+    axis_origin_z = -pilecap_thickness_mm * 0.72
+    arrow = max(depth_y_mm, height_z_mm) * 0.16
+    _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=arrow, dy=0, label="+y", color=COLORS["axis_y"])
+    _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=0, dy=arrow, label="+z", color=COLORS["axis_z"])
+
+    pad = max(depth_y_mm, height_z_mm) * 0.10
+    fig.update_xaxes(range=[-pile_y - pad, pile_y + pad])
+    fig.update_yaxes(range=[-pilecap_thickness_mm - pad * 0.35, height_z_mm + bearing_h + pad * 0.35])
+    return _finish_view(fig, "Side view", "y (mm)", "z (mm)")
+
+
+def reinforcement_plan(check: SectionCheck) -> go.Figure:
+    fig = go.Figure()
+    x = check.width_x_mm / 2.0
+    y = check.depth_y_mm / 2.0
+    _add_rect(fig, x0=-x, x1=x, y0=-y, y1=y, fillcolor="#f8fafc", linecolor=COLORS["concrete_line"])
+    marker_size = max(7, min(16, check.bar_dia_mm * 0.45))
+    fig.add_trace(
+        go.Scatter(
+            x=[bar.x_mm for bar in check.bars],
+            y=[bar.y_mm for bar in check.bars],
+            mode="markers",
+            marker={"size": marker_size, "color": COLORS["steel"], "line": {"color": "#7c2d12", "width": 1}},
+            hovertemplate="x=%{x:.0f} mm<br>y=%{y:.0f} mm<extra></extra>",
+        )
+    )
+    arrow = max(check.width_x_mm, check.depth_y_mm) * 0.18
+    _add_axis_arrow(fig, x=-x * 0.78, y=-y * 0.78, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
+    _add_axis_arrow(fig, x=-x * 0.78, y=-y * 0.78, dx=0, dy=arrow, label="+y", color=COLORS["axis_y"])
+    pad = max(check.width_x_mm, check.depth_y_mm) * 0.08
+    fig.update_xaxes(range=[-x - pad, x + pad])
+    fig.update_yaxes(range=[-y - pad, y + pad])
+    return _finish_view(fig, "Base section reinforcement", "x (mm)", "y (mm)")
+
+
+def interaction_plot(check: SectionCheck, pu_kn: float, mux_knm: float, muy_knm: float) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=[p["phi_mn_knm"] for p in check.curve_x], y=[p["phi_pn_kn"] for p in check.curve_x], mode="lines", name="about x", line={"color": COLORS["axis_x"], "width": 3}))
+    fig.add_trace(go.Scatter(x=[p["phi_mn_knm"] for p in check.curve_y], y=[p["phi_pn_kn"] for p in check.curve_y], mode="lines", name="about y", line={"color": COLORS["axis_y"], "width": 3}))
+    fig.add_trace(go.Scatter(x=[abs(mux_knm)], y=[pu_kn], mode="markers", name="Pu, Mux", marker={"size": 12, "color": COLORS["axis_x"], "symbol": "x"}))
+    fig.add_trace(go.Scatter(x=[abs(muy_knm)], y=[pu_kn], mode="markers", name="Pu, Muy", marker={"size": 12, "color": COLORS["axis_y"], "symbol": "x"}))
+    fig.update_layout(
+        title={"text": "Uniaxial interaction curves at base section", "x": 0.02, "xanchor": "left"},
+        height=440,
+        margin={"l": 24, "r": 24, "t": 54, "b": 24},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        legend={"orientation": "h", "y": 1.02, "x": 0.52, "xanchor": "center"},
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+    )
+    fig.update_xaxes(title="phi Mn (kN-m)", gridcolor=COLORS["grid"], zeroline=True)
+    fig.update_yaxes(title="phi Pn (kN)", gridcolor=COLORS["grid"], zeroline=True)
+    return fig
+
+
+def load_vector_plot(resultant_mx: float, resultant_my: float) -> go.Figure:
+    magnitude = math.hypot(resultant_mx, resultant_my)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[0, resultant_my],
+            y=[0, resultant_mx],
+            mode="lines+markers",
+            line={"color": "#334155", "width": 4},
+            marker={"size": [8, 12], "color": ["#334155", "#dc2626"]},
+            hovertemplate="My=%{x:.1f} kN-m<br>Mx=%{y:.1f} kN-m<extra></extra>",
+        )
+    )
+    fig.add_annotation(x=resultant_my, y=resultant_mx, text=f"|M| = {magnitude:,.0f} kN-m", showarrow=True, arrowhead=2, ax=-25, ay=-25)
+    fig.update_layout(
+        title={"text": "Signed base moment vector", "x": 0.02, "xanchor": "left"},
+        height=340,
+        margin={"l": 24, "r": 24, "t": 54, "b": 24},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        showlegend=False,
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+    )
+    fig.update_xaxes(title="My (kN-m)", gridcolor=COLORS["grid"], zeroline=True, zerolinecolor="#111827")
+    fig.update_yaxes(title="Mx (kN-m)", gridcolor=COLORS["grid"], zeroline=True, zerolinecolor="#111827")
+    return fig
 
 
 st.set_page_config(
@@ -224,7 +1009,7 @@ load_cols = st.columns([1, 1, 3])
 with load_cols[0]:
     bearing_count = st.number_input("Number of bearings", min_value=1, max_value=40, value=4, step=1)
 with load_cols[1]:
-    reset_table = st.button("Reset layout", use_container_width=True)
+    reset_table = st.button("Reset layout", width="stretch")
 
 if "bearing_table" not in st.session_state or reset_table:
     st.session_state.bearing_table = default_bearings(int(bearing_count), width_x_mm, height_z_mm)
@@ -234,7 +1019,7 @@ elif len(st.session_state.bearing_table) != int(bearing_count):
 edited = st.data_editor(
     st.session_state.bearing_table,
     num_rows="dynamic",
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
     column_config={
         "name": st.column_config.TextColumn("Bearing"),
@@ -324,7 +1109,7 @@ with tabs[0]:
             ],
             columns=["Check", "Ratio"],
         )
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+        st.dataframe(summary, width="stretch", hide_index=True)
 
         rebar_text = (
             f"{check.bar_count} bars DB{check.bar_dia_mm:.0f}: "
@@ -333,7 +1118,7 @@ with tabs[0]:
         )
         st.info(rebar_text)
 
-    st.plotly_chart(load_vector_plot(resultant.mux_knm, resultant.muy_knm), use_container_width=True)
+    st.plotly_chart(load_vector_plot(resultant.mux_knm, resultant.muy_knm), width="stretch")
 
 with tabs[1]:
     view_cols = st.columns(2)
@@ -346,7 +1131,7 @@ with tabs[1]:
                 pilecap_overhang_mm=pilecap_overhang_mm,
                 bearing_size_mm=bearing_size_mm,
             ),
-            use_container_width=True,
+            width="stretch",
         )
     with view_cols[1]:
         st.plotly_chart(
@@ -358,7 +1143,7 @@ with tabs[1]:
                 pilecap_thickness_mm=pilecap_thickness_mm,
                 bearing_size_mm=bearing_size_mm,
             ),
-            use_container_width=True,
+            width="stretch",
         )
     st.plotly_chart(
         side_view(
@@ -369,7 +1154,7 @@ with tabs[1]:
             pilecap_thickness_mm=pilecap_thickness_mm,
             bearing_size_mm=bearing_size_mm,
         ),
-        use_container_width=True,
+        width="stretch",
     )
 
 with tabs[2]:
@@ -378,16 +1163,16 @@ with tabs[2]:
     else:
         sec_cols = st.columns(2)
         with sec_cols[0]:
-            st.plotly_chart(reinforcement_plan(check), use_container_width=True)
+            st.plotly_chart(reinforcement_plan(check), width="stretch")
         with sec_cols[1]:
             st.plotly_chart(
                 interaction_plot(check, resultant.pu_kn, resultant.design_mux_knm, resultant.design_muy_knm),
-                use_container_width=True,
+                width="stretch",
             )
         bar_table = pd.DataFrame(
             [{"bar": idx + 1, "x_mm": bar.x_mm, "y_mm": bar.y_mm, "area_mm2": bar.area_mm2} for idx, bar in enumerate(check.bars)]
         )
-        st.dataframe(bar_table, use_container_width=True, hide_index=True)
+        st.dataframe(bar_table, width="stretch", hide_index=True)
 
 with tabs[3]:
     st.markdown(
