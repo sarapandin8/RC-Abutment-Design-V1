@@ -863,24 +863,34 @@ st.markdown(
 )
 
 
-def default_bearings(count: int, width_x_mm: float, height_z_mm: float) -> pd.DataFrame:
-    spacing = width_x_mm / (count + 1)
+def default_bearings(
+    bearings_per_row: int,
+    row_count: int,
+    width_x_mm: float,
+    height_z_mm: float,
+    row_spacing_y_mm: float,
+) -> pd.DataFrame:
+    spacing = width_x_mm / (bearings_per_row + 1)
+    y_positions = [0.0] if row_count == 1 else [row_spacing_y_mm / 2.0, -row_spacing_y_mm / 2.0]
     rows = []
-    for index in range(count):
-        x = -width_x_mm / 2.0 + spacing * (index + 1)
-        rows.append(
-            {
-                "name": f"B{index + 1}",
-                "x_mm": round(x, 0),
-                "y_mm": 0.0,
-                "z_mm": height_z_mm,
-                "Pu_x_kN": 0.0,
-                "Pu_y_kN": 0.0,
-                "Pu_z_kN": 1200.0,
-                "Mu_x_kNm": 0.0,
-                "Mu_y_kNm": 0.0,
-            }
-        )
+    for row_index, y in enumerate(y_positions):
+        row_label = "A" if row_count == 2 and row_index == 0 else "B" if row_count == 2 else ""
+        for index in range(bearings_per_row):
+            x = -width_x_mm / 2.0 + spacing * (index + 1)
+            bearing_number = row_index * bearings_per_row + index + 1
+            rows.append(
+                {
+                    "name": f"{row_label}{index + 1}" if row_count == 2 else f"B{bearing_number}",
+                    "x_mm": round(x, 0),
+                    "y_mm": round(y, 0),
+                    "z_mm": height_z_mm,
+                    "Pu_x_kN": 0.0,
+                    "Pu_y_kN": 0.0,
+                    "Pu_z_kN": 1200.0,
+                    "Mu_x_kNm": 0.0,
+                    "Mu_y_kNm": 0.0,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -1005,16 +1015,41 @@ with st.sidebar:
 
 
 st.subheader("Bearing Loads")
-load_cols = st.columns([1, 1, 3])
+load_cols = st.columns([1, 1, 1, 1])
 with load_cols[0]:
-    bearing_count = st.number_input("Number of bearings", min_value=1, max_value=40, value=4, step=1)
+    bearing_rows = st.radio("Bearing rows", [1, 2], horizontal=True)
 with load_cols[1]:
+    bearings_per_row = st.number_input("Bearings per row", min_value=1, max_value=20, value=4, step=1)
+with load_cols[2]:
+    row_spacing_y_mm = st.number_input(
+        "Row spacing y (mm)",
+        min_value=0.0,
+        max_value=float(depth_y_mm),
+        value=min(600.0, float(depth_y_mm)),
+        step=50.0,
+        disabled=int(bearing_rows) == 1,
+    )
+with load_cols[3]:
     reset_table = st.button("Reset layout", width="stretch")
 
+expected_bearing_count = int(bearing_rows) * int(bearings_per_row)
+
 if "bearing_table" not in st.session_state or reset_table:
-    st.session_state.bearing_table = default_bearings(int(bearing_count), width_x_mm, height_z_mm)
-elif len(st.session_state.bearing_table) != int(bearing_count):
-    st.session_state.bearing_table = default_bearings(int(bearing_count), width_x_mm, height_z_mm)
+    st.session_state.bearing_table = default_bearings(
+        int(bearings_per_row),
+        int(bearing_rows),
+        width_x_mm,
+        height_z_mm,
+        row_spacing_y_mm,
+    )
+elif len(st.session_state.bearing_table) != expected_bearing_count:
+    st.session_state.bearing_table = default_bearings(
+        int(bearings_per_row),
+        int(bearing_rows),
+        width_x_mm,
+        height_z_mm,
+        row_spacing_y_mm,
+    )
 
 edited = st.data_editor(
     st.session_state.bearing_table,
@@ -1181,6 +1216,8 @@ with tabs[3]:
 
         x and y are plan axes. z is vertical upward. Bearing `Pu_z` is entered as positive downward compression.
         `Pu_x`, `Pu_y`, `Mu_x`, and `Mu_y` follow the displayed positive axes and the right-hand rule.
+        Bearing layout can be generated as 1 row or 2 rows. For 2 rows, the generated y positions are `+s/2` and `-s/2`,
+        where `s` is the row spacing. The generated table remains editable for custom pier layouts.
 
         **Fixed-base resultants**
 
