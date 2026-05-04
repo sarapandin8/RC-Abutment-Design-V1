@@ -237,6 +237,92 @@ def combine_bearing_loads(records: Iterable[dict]) -> BearingResultant:
     )
 
 
+def _min_positive_spacing_mm(values: Iterable[float]) -> float:
+    unique_values = sorted({round(float(value), 3) for value in values})
+    spacings = [
+        unique_values[index + 1] - unique_values[index]
+        for index in range(len(unique_values) - 1)
+        if unique_values[index + 1] - unique_values[index] > 1e-6
+    ]
+    return min(spacings) if spacings else math.inf
+
+
+def default_strength_bearing_names(records: list[dict]) -> list[str]:
+    if not records:
+        return []
+    groups: dict[float, list[dict]] = {}
+    for row in records:
+        groups.setdefault(round(float(row.get("x_mm", 0.0)), 3), []).append(row)
+
+    def group_score(group: list[dict]) -> float:
+        return sum(
+            abs(float(row.get("Pu_z_kN", 0.0)))
+            + 0.25 * abs(float(row.get("Pu_x_kN", 0.0)))
+            + 0.25 * abs(float(row.get("Pu_y_kN", 0.0)))
+            + 0.05 * abs(float(row.get("Mu_x_kNm", 0.0)))
+            + 0.05 * abs(float(row.get("Mu_y_kNm", 0.0)))
+            for row in group
+        )
+
+    critical_group = max(groups.values(), key=group_score)
+    return [str(row.get("name", "")) for row in critical_group]
+
+
+def selected_bearings(records: list[dict], selected_names: Iterable[str]) -> list[dict]:
+    selected = {str(name) for name in selected_names}
+    return [row for row in records if str(row.get("name", "")) in selected]
+
+
+def strip_center_x_mm(records: list[dict]) -> float:
+    if not records:
+        return 0.0
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for row in records:
+        x = float(row.get("x_mm", 0.0))
+        weight = abs(float(row.get("Pu_z_kN", 0.0)))
+        weighted_sum += weight * x
+        weight_total += weight
+    if weight_total > 1e-9:
+        return weighted_sum / weight_total
+    return sum(float(row.get("x_mm", 0.0)) for row in records) / len(records)
+
+
+def effective_strip_recommendation(
+    *,
+    records: list[dict],
+    selected_names: Iterable[str],
+    full_width_x_mm: float,
+    depth_y_mm: float,
+    bearing_size_mm: float,
+) -> dict[str, float]:
+    selected = selected_bearings(records, selected_names) or records
+    selected_x = [float(row.get("x_mm", 0.0)) for row in selected]
+    loaded_width = bearing_size_mm + (max(selected_x) - min(selected_x) if selected_x else 0.0)
+    distribution_limit = loaded_width + 4.0 * depth_y_mm
+    spacing_limit = _min_positive_spacing_mm(float(row.get("x_mm", 0.0)) for row in records)
+    if not math.isfinite(spacing_limit):
+        spacing_limit = full_width_x_mm
+    available_limit = full_width_x_mm
+    recommended = min(distribution_limit, spacing_limit, available_limit)
+    return {
+        "loaded_width_mm": loaded_width,
+        "distribution_limit_mm": distribution_limit,
+        "spacing_limit_mm": spacing_limit,
+        "available_limit_mm": available_limit,
+        "recommended_width_mm": max(1.0, recommended),
+    }
+
+
+def localize_bearing_records(records: list[dict], strip_center_x: float) -> list[dict]:
+    localized: list[dict] = []
+    for row in records:
+        local = dict(row)
+        local["x_mm"] = float(row.get("x_mm", 0.0)) - strip_center_x
+        localized.append(local)
+    return localized
+
+
 def make_perimeter_bars(
     width_x_mm: float,
     depth_y_mm: float,
@@ -983,6 +1069,9 @@ def plan_view(
     depth_y_mm: float,
     pilecap_overhang_mm: float,
     bearing_size_mm: float,
+    selected_bearing_names: Iterable[str] | None = None,
+    strip_center_x_mm: float | None = None,
+    strip_width_x_mm: float | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     pile_x = width_x_mm / 2.0 + pilecap_overhang_mm
@@ -992,13 +1081,38 @@ def plan_view(
 
     _add_rect(fig, x0=-pile_x, x1=pile_x, y0=-pile_y, y1=pile_y, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
     _add_rect(fig, x0=-abut_x, x1=abut_x, y0=-abut_y, y1=abut_y, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
+    if strip_center_x_mm is not None and strip_width_x_mm is not None:
+        strip_x0 = max(-abut_x, strip_center_x_mm - strip_width_x_mm / 2.0)
+        strip_x1 = min(abut_x, strip_center_x_mm + strip_width_x_mm / 2.0)
+        _add_rect(
+            fig,
+            x0=strip_x0,
+            x1=strip_x1,
+            y0=-abut_y,
+            y1=abut_y,
+            fillcolor="#fef3c7",
+            linecolor="#d97706",
+            dash="dot",
+            opacity=0.42,
+        )
 
     half = bearing_size_mm / 2.0
+    selected_names = {str(name) for name in selected_bearing_names or []}
     for row in bearings:
         x = float(row.get("x_mm", 0.0))
         y = float(row.get("y_mm", 0.0))
         name = str(row.get("name", "B"))
-        _add_rect(fig, x0=x - half, x1=x + half, y0=y - half, y1=y + half, fillcolor=COLORS["bearing"], linecolor="#065f5b", opacity=0.95)
+        is_selected = name in selected_names
+        _add_rect(
+            fig,
+            x0=x - half,
+            x1=x + half,
+            y0=y - half,
+            y1=y + half,
+            fillcolor="#f59e0b" if is_selected else COLORS["bearing"],
+            linecolor="#92400e" if is_selected else "#065f5b",
+            opacity=0.98 if is_selected else 0.95,
+        )
         fig.add_annotation(x=x, y=y, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     axis_gap = max(650.0, max(width_x_mm, depth_y_mm) * 0.12)
@@ -1632,7 +1746,7 @@ def status_html(status: str, ratio: float) -> str:
     return f'<span class="status-pill {klass}">{label} &nbsp; U = {ratio:.3f}</span>'
 
 
-def metric_row(resultant, check):
+def metric_row(resultant, check, design_width_x_mm: float | None = None):
     cols = st.columns(6)
     cols[0].metric("Pu compression", f"{resultant.pu_kn:,.0f} kN")
     cols[1].metric("Vx resultant", f"{resultant.vx_kn:,.0f} kN")
@@ -1648,7 +1762,12 @@ def metric_row(resultant, check):
         cols[2].metric("phi Mny at Pu", f"{check.phi_mny_at_pu_knm:,.0f} kN-m")
         cols[3].metric("As provided", f"{check.as_total_mm2:,.0f} mm2")
         cols[4].metric("rho", f"{check.rho_percent:.3f} %")
-        cols[5].metric("max c/c spacing", f"{check.max_center_spacing_mm:,.0f} mm")
+        cols[5].metric(
+            "design width",
+            f"{design_width_x_mm if design_width_x_mm is not None else check.width_x_mm:,.0f} mm",
+            delta=f"max c/c {check.max_center_spacing_mm:,.0f} mm",
+            delta_color="off",
+        )
 
 
 st.title("RC Bridge Abutment ULS Designer")
@@ -1824,7 +1943,91 @@ edited = st.data_editor(
 )
 bearings_df = clean_bearings(st.session_state.bearing_table)
 records = bearings_df.to_dict("records")
-resultant = combine_bearing_loads(records)
+global_resultant = combine_bearing_loads(records)
+
+st.subheader("Strength Design Strip")
+bearing_names = [str(row.get("name", "")) for row in records]
+default_strength_names = default_strength_bearing_names(records)
+stored_strength_names = st.session_state.get("strength_bearing_names", default_strength_names)
+stored_strength_names = [name for name in stored_strength_names if name in bearing_names]
+if not stored_strength_names:
+    stored_strength_names = default_strength_names
+st.session_state.strength_bearing_names = stored_strength_names
+
+strip_cols = st.columns([1.1, 1.4, 1.1])
+with strip_cols[0]:
+    strip_width_mode = st.radio(
+        "Strength section width",
+        ["Auto effective strip", "Manual strip width", "Full abutment width"],
+        horizontal=False,
+        help="Use an effective strip for local bearing checks. Full width is mainly for global wall-line checks.",
+    )
+with strip_cols[1]:
+    selected_strength_names = st.multiselect(
+        "Bearings included in strength strip",
+        options=bearing_names,
+        key="strength_bearing_names",
+        disabled=strip_width_mode == "Full abutment width",
+        help="Default selects the critical x-line of bearings. For a pier with two rows, bearings with the same x are selected together.",
+    )
+
+selected_strength_records = selected_bearings(records, selected_strength_names)
+if strip_width_mode != "Full abutment width" and not selected_strength_records:
+    selected_strength_names = default_strength_names
+    selected_strength_records = selected_bearings(records, selected_strength_names)
+
+strip_info = effective_strip_recommendation(
+    records=records,
+    selected_names=selected_strength_names,
+    full_width_x_mm=width_x_mm,
+    depth_y_mm=depth_y_mm,
+    bearing_size_mm=bearing_size_mm,
+)
+auto_strip_width_x_mm = strip_info["recommended_width_mm"]
+if strip_width_mode == "Full abutment width":
+    strength_design_width_x_mm = width_x_mm
+    strength_strip_center_x_mm = 0.0
+    strength_records_global = records
+    strength_display_names = bearing_names
+elif strip_width_mode == "Manual strip width":
+    with strip_cols[2]:
+        strength_design_width_x_mm = st.number_input(
+            "manual strip width (mm)",
+            min_value=max(100.0, bearing_size_mm),
+            max_value=float(width_x_mm),
+            value=float(min(width_x_mm, max(auto_strip_width_x_mm, bearing_size_mm))),
+            step=50.0,
+            help="Use this when the project specification defines another effective width.",
+        )
+    strength_strip_center_x_mm = strip_center_x_mm(selected_strength_records)
+    strength_records_global = selected_strength_records
+    strength_display_names = selected_strength_names
+else:
+    with strip_cols[2]:
+        st.metric("recommended beff", f"{auto_strip_width_x_mm:,.0f} mm")
+    strength_design_width_x_mm = auto_strip_width_x_mm
+    strength_strip_center_x_mm = strip_center_x_mm(selected_strength_records)
+    strength_records_global = selected_strength_records
+    strength_display_names = selected_strength_names
+
+strength_records = localize_bearing_records(strength_records_global, strength_strip_center_x_mm)
+resultant = combine_bearing_loads(strength_records)
+spacing_text = (
+    f"{strip_info['spacing_limit_mm']:,.0f} mm"
+    if math.isfinite(strip_info["spacing_limit_mm"])
+    else "not limited"
+)
+st.caption(
+    "Strength check uses local x about the selected strip center. "
+    f"Effective width guide: loaded width + 4t = {strip_info['distribution_limit_mm']:,.0f} mm, "
+    f"bearing spacing limit = {spacing_text}, available length = {strip_info['available_limit_mm']:,.0f} mm."
+)
+if strip_width_mode != "Full abutment width":
+    st.info(
+        f"Design strip: {', '.join(strength_display_names)} | "
+        f"center x = {strength_strip_center_x_mm:,.0f} mm | "
+        f"section used for strength = {strength_design_width_x_mm:,.0f} x {depth_y_mm:,.0f} mm"
+    )
 
 if resultant.pu_kn < 0:
     st.warning("Pu_z resultant is net tension. The app can show resultants, but reinforcement design assumptions should be checked carefully.")
@@ -1838,7 +2041,7 @@ try:
         else:
             with st.spinner("Searching reinforcement layout..."):
                 check = find_reinforcement(
-                    width_x_mm=width_x_mm,
+                    width_x_mm=strength_design_width_x_mm,
                     depth_y_mm=depth_y_mm,
                     cover_mm=cover_mm,
                     bar_dia_options_mm=tuple(dia_options),
@@ -1860,7 +2063,7 @@ try:
                 design_error = "No reinforcement layout passed within the selected auto limits."
     else:
         check = analyze_section(
-            width_x_mm=width_x_mm,
+            width_x_mm=strength_design_width_x_mm,
             depth_y_mm=depth_y_mm,
             cover_mm=cover_mm,
             bar_dia_mm=float(bar_dia_mm),
@@ -1884,11 +2087,24 @@ except Exception as exc:  # noqa: BLE001
 tabs = st.tabs(["Results", "Views", "Section", "Method"])
 
 with tabs[0]:
-    metric_row(resultant, check)
+    metric_row(resultant, check, strength_design_width_x_mm)
     st.markdown(
         '<p class="small-note">Vx and Vy are reported as fixed-base force resultants only. Shear design is intentionally outside this scope.</p>',
         unsafe_allow_html=True,
     )
+    with st.expander("Global all-bearing resultants", expanded=False):
+        global_table = pd.DataFrame(
+            [
+                ["Pu compression", global_resultant.pu_kn, "kN"],
+                ["Vx resultant", global_resultant.vx_kn, "kN"],
+                ["Vy resultant", global_resultant.vy_kn, "kN"],
+                ["Mux about global origin", global_resultant.mux_knm, "kN-m"],
+                ["Muy about global origin", global_resultant.muy_knm, "kN-m"],
+                ["Tz resultant", global_resultant.torsion_z_knm, "kN-m"],
+            ],
+            columns=["Resultant", "Value", "Unit"],
+        )
+        st.dataframe(global_table, width="stretch", hide_index=True)
     if design_error:
         st.error(design_error)
     elif check is not None:
@@ -1938,6 +2154,9 @@ with tabs[1]:
                 depth_y_mm=depth_y_mm,
                 pilecap_overhang_mm=pilecap_overhang_mm,
                 bearing_size_mm=bearing_size_mm,
+                selected_bearing_names=strength_display_names,
+                strip_center_x_mm=strength_strip_center_x_mm,
+                strip_width_x_mm=strength_design_width_x_mm,
             ),
             width="stretch",
         )
@@ -2013,6 +2232,21 @@ with tabs[3]:
         `Mux = sum(Mu_x + (-y Pu_z - z Pu_y) / 1000)`  
         `Muy = sum(Mu_y + (z Pu_x + x Pu_z) / 1000)`  
         `Tz = sum((x Pu_y - y Pu_x) / 1000)`
+
+        **Effective design strip**
+
+        The drawing and bearing table use the full abutment width. The strength check may use either the full width
+        or a local effective strip. In effective strip mode, the app selects the governing bearing x-line by default,
+        shifts the selected bearing coordinates to the strip center, then checks a rectangular section whose width is
+        the selected strip width.
+
+        The automatic strip recommendation is:
+
+        `beff = min(loaded bearing width + 4t, bearing center spacing, available abutment length)`
+
+        where `t` is the abutment thickness along y. This follows the common wall concentrated-load distribution
+        concept used for conservative preliminary strip checks. Verify the final effective width against the governing
+        ACI/AASHTO edition and the bridge authority's design criteria.
 
         **RC section check**
 
