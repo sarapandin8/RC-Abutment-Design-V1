@@ -2233,20 +2233,58 @@ with tabs[3]:
         `Muy = sum(Mu_y + (z Pu_x + x Pu_z) / 1000)`  
         `Tz = sum((x Pu_y - y Pu_x) / 1000)`
 
-        **Effective design strip**
+        **Effective design strip for Pn / PMM strength**
 
         The drawing and bearing table use the full abutment width. The strength check may use either the full width
         or a local effective strip. In effective strip mode, the app selects the governing bearing x-line by default,
         shifts the selected bearing coordinates to the strip center, then checks a rectangular section whose width is
-        the selected strip width.
+        the selected strip width. This prevents the axial capacity `phi Pn` from being unconservatively inflated by
+        using the full abutment length for a localized bearing reaction.
 
         The automatic strip recommendation is:
 
-        `beff = min(loaded bearing width + 4t, bearing center spacing, available abutment length)`
+        `beff = min(l_loaded + 4t, s_cc, L_available)`
 
-        where `t` is the abutment thickness along y. This follows the common wall concentrated-load distribution
-        concept used for conservative preliminary strip checks. Verify the final effective width against the governing
-        ACI/AASHTO edition and the bridge authority's design criteria.
+        where:
+
+        `beff` = effective width used in the strength section  
+        `l_loaded` = loaded bearing/group width in x, taken as bearing size plus the distance between the outermost selected bearings  
+        `t` = abutment thickness along y  
+        `s_cc` = center-to-center spacing to the adjacent bearing line in x  
+        `L_available` = available abutment length between free edges, joints, or other physical limits
+
+        The section properties for axial strength are then based on:
+
+        `Ag = beff x t`
+
+        and the reinforcement in the checked strip, rather than the full abutment plan length. Use the full abutment
+        width only for a global wall-line check or when a refined load-distribution model justifies that the load is
+        distributed over the full length.
+
+        **Reference basis for effective width**
+
+        ACI 318 wall provisions for concentrated vertical loads use the same load-distribution idea: unless a more
+        detailed analysis demonstrates otherwise, the horizontal length of wall considered effective for each
+        concentrated load is limited by the spacing to adjacent loads and by the loaded length plus four times the wall
+        thickness. See ACI 318-14 Section 11.2.3.1; in later ACI editions, verify the corresponding wall/load
+        distribution clause in the adopted code.
+
+        ACI 318 Chapter 22 governs section strength for axial load with flexure, while Chapter 21 governs strength
+        reduction factors. The effective strip width is therefore not a separate `phi Pn` equation; it defines the
+        rectangular section dimensions used before calculating `phi Pn`, `phi Mnx`, `phi Mny`, and the PMM surface.
+
+        AASHTO LRFD does not provide one universal effective abutment width for every bearing layout. Bridge practice
+        commonly uses a design strip or per-unit-width substructure check unless a grillage/finite-element/refined
+        distribution model is used. FHWA LRFD abutment design examples demonstrate this strip-style workflow for
+        abutment stem/backwall design. Final width should follow the governing AASHTO edition, owner/authority design
+        manual, joint layout, bearing spacing, diaphragm/load path, and any refined analysis used for the project.
+
+        References:
+
+        - ACI 318-14, Section 11.2.3.1: concentrated vertical load distribution in walls.
+        - ACI 318-19, Chapters 21 and 22: strength reduction factors and sectional strength for axial load with flexure.
+        - AASHTO LRFD Bridge Design Specifications: substructure analysis/design provisions and owner criteria for load distribution.
+        - FHWA, LRFD Design Example: Abutment and Wingwall Design, illustrating strip/per-unit-width abutment design workflow.
 
         **RC section check**
 
