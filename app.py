@@ -1024,6 +1024,155 @@ def _add_axis_arrow(
     )
 
 
+def _max_abs_component(records: Iterable[dict], keys: Iterable[str]) -> float:
+    values: list[float] = []
+    for row in records:
+        for key in keys:
+            values.append(abs(float(row.get(key, 0.0))))
+    return max(values) if values else 0.0
+
+
+def _scaled_load_delta(value: float, max_abs: float, max_length: float, min_length: float) -> float:
+    if abs(value) <= 1e-9 or max_abs <= 1e-9:
+        return 0.0
+    length = min_length + (max_length - min_length) * min(1.0, abs(value) / max_abs)
+    return math.copysign(length, value)
+
+
+def _load_label(name: str, value: float, unit: str) -> str:
+    return f"{name} {value:+.0f} {unit}"
+
+
+def _add_load_arrow(
+    fig: go.Figure,
+    *,
+    x: float,
+    y: float,
+    dx: float,
+    dy: float,
+    label: str,
+    color: str,
+) -> None:
+    if abs(dx) <= 1e-9 and abs(dy) <= 1e-9:
+        return
+    fig.add_annotation(
+        x=x + dx,
+        y=y + dy,
+        ax=x,
+        ay=y,
+        xref="x",
+        yref="y",
+        axref="x",
+        ayref="y",
+        text=label,
+        showarrow=True,
+        arrowhead=3,
+        arrowsize=1.05,
+        arrowwidth=2.2,
+        arrowcolor=color,
+        font={"color": color, "size": 11},
+        bgcolor="rgba(255,255,255,0.82)",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=2,
+    )
+
+
+def _add_load_tag(
+    fig: go.Figure,
+    *,
+    x: float,
+    y: float,
+    text: str,
+    color: str,
+) -> None:
+    if not text:
+        return
+    fig.add_annotation(
+        x=x,
+        y=y,
+        text=text,
+        showarrow=False,
+        align="left",
+        bgcolor="rgba(255,255,255,0.84)",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=3,
+        font={"color": color, "size": 10},
+    )
+
+
+def _add_moment_arc(
+    fig: go.Figure,
+    *,
+    x: float,
+    y: float,
+    radius: float,
+    moment: float,
+    label: str,
+    color: str,
+) -> None:
+    if abs(moment) <= 1e-9:
+        return
+    start = -0.45 * math.pi
+    stop = 0.95 * math.pi
+    if moment < 0.0:
+        start, stop = stop, start
+    angles = np.linspace(start, stop, 24)
+    xs = [x + radius * math.cos(angle) for angle in angles]
+    ys = [y + radius * math.sin(angle) for angle in angles]
+    fig.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines",
+            line={"color": color, "width": 2},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_annotation(
+        x=xs[-1],
+        y=ys[-1],
+        ax=xs[-2],
+        ay=ys[-2],
+        xref="x",
+        yref="y",
+        axref="x",
+        ayref="y",
+        text=_load_label(label, moment, "kN-m"),
+        showarrow=True,
+        arrowhead=3,
+        arrowsize=1.0,
+        arrowwidth=2,
+        arrowcolor=color,
+        font={"color": color, "size": 10},
+        bgcolor="rgba(255,255,255,0.84)",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=2,
+    )
+
+
+def _add_load_legend(fig: go.Figure, text: str) -> None:
+    fig.add_annotation(
+        x=0.01,
+        y=0.99,
+        xref="paper",
+        yref="paper",
+        text=text,
+        showarrow=False,
+        xanchor="left",
+        yanchor="top",
+        align="left",
+        bgcolor="rgba(255,255,255,0.86)",
+        bordercolor="#cbd5e1",
+        borderwidth=1,
+        borderpad=4,
+        font={"color": "#334155", "size": 11},
+    )
+
+
 def _finish_view(
     fig: go.Figure,
     title: str,
@@ -1074,6 +1223,7 @@ def plan_view(
     strip_width_x_mm: float | None = None,
 ) -> go.Figure:
     fig = go.Figure()
+    bearing_records = list(bearings)
     pile_x = width_x_mm / 2.0 + pilecap_overhang_mm
     pile_y = depth_y_mm / 2.0 + pilecap_overhang_mm
     abut_x = width_x_mm / 2.0
@@ -1098,7 +1248,7 @@ def plan_view(
 
     half = bearing_size_mm / 2.0
     selected_names = {str(name) for name in selected_bearing_names or []}
-    for row in bearings:
+    for row in bearing_records:
         x = float(row.get("x_mm", 0.0))
         y = float(row.get("y_mm", 0.0))
         name = str(row.get("name", "B"))
@@ -1115,6 +1265,51 @@ def plan_view(
         )
         fig.add_annotation(x=x, y=y, text=name, showarrow=False, font={"color": "white", "size": 11})
 
+    plan_force_max = _max_abs_component(bearing_records, ("Pu_x_kN", "Pu_y_kN"))
+    arrow_max = min(max(max(width_x_mm, depth_y_mm) * 0.075, 240.0), 720.0)
+    arrow_min = min(180.0, arrow_max * 0.55)
+    for row in bearing_records:
+        x = float(row.get("x_mm", 0.0))
+        y = float(row.get("y_mm", 0.0))
+        px = float(row.get("Pu_x_kN", 0.0))
+        py = float(row.get("Pu_y_kN", 0.0))
+        pz = float(row.get("Pu_z_kN", 0.0))
+        mx = float(row.get("Mu_x_kNm", 0.0))
+        my = float(row.get("Mu_y_kNm", 0.0))
+        _add_load_arrow(
+            fig,
+            x=x,
+            y=y + half * 1.15,
+            dx=_scaled_load_delta(px, plan_force_max, arrow_max, arrow_min),
+            dy=0.0,
+            label=_load_label("Pu_x", px, "kN"),
+            color=COLORS["axis_x"],
+        )
+        _add_load_arrow(
+            fig,
+            x=x - half * 1.15,
+            y=y,
+            dx=0.0,
+            dy=_scaled_load_delta(py, plan_force_max, arrow_max, arrow_min),
+            label=_load_label("Pu_y", py, "kN"),
+            color=COLORS["axis_y"],
+        )
+        tag_lines: list[str] = []
+        if abs(pz) > 1e-9:
+            tag_lines.append(f"Pu_z {'down' if pz >= 0.0 else 'up'} {abs(pz):.0f} kN")
+        if abs(mx) > 1e-9:
+            tag_lines.append(f"Mu_x {mx:+.0f} kN-m")
+        if abs(my) > 1e-9:
+            tag_lines.append(f"Mu_y {my:+.0f} kN-m")
+        _add_load_tag(
+            fig,
+            x=x + half * 1.55,
+            y=y - half * 1.55,
+            text="<br>".join(tag_lines),
+            color="#7c3aed",
+        )
+    _add_load_legend(fig, "Loads shown: Pu_x blue, Pu_y red, Pu_z / Mu tags purple")
+
     axis_gap = max(650.0, max(width_x_mm, depth_y_mm) * 0.12)
     axis_origin_x = -pile_x - axis_gap
     axis_origin_y = -pile_y - axis_gap
@@ -1124,8 +1319,8 @@ def plan_view(
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow_y, label="+y", color=COLORS["axis_y"])
 
     pad = max(width_x_mm, depth_y_mm) * 0.12
-    fig.update_xaxes(range=[axis_origin_x - pad * 0.25, pile_x + pad])
-    fig.update_yaxes(range=[axis_origin_y - pad * 0.25, pile_y + pad])
+    fig.update_xaxes(range=[axis_origin_x - pad * 0.25, pile_x + pad + arrow_max * 0.35])
+    fig.update_yaxes(range=[axis_origin_y - pad * 0.25, pile_y + pad + arrow_max * 0.35])
     return _finish_view(fig, "Section plan at bearing level", "x (mm)", "y (mm)", show_zero_axes=False)
 
 
@@ -1139,6 +1334,7 @@ def front_view(
     bearing_size_mm: float,
 ) -> go.Figure:
     fig = go.Figure()
+    bearing_records = list(bearings)
     pile_x = width_x_mm / 2.0 + pilecap_overhang_mm
     abut_x = width_x_mm / 2.0
     half = bearing_size_mm / 2.0
@@ -1147,12 +1343,51 @@ def front_view(
     _add_rect(fig, x0=-pile_x, x1=pile_x, y0=-pilecap_thickness_mm, y1=0, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
     _add_rect(fig, x0=-abut_x, x1=abut_x, y0=0, y1=height_z_mm, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
 
-    for row in bearings:
+    for row in bearing_records:
         x = float(row.get("x_mm", 0.0))
         z = float(row.get("z_mm", height_z_mm))
         name = str(row.get("name", "B"))
         _add_rect(fig, x0=x - half, x1=x + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
         fig.add_annotation(x=x, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
+
+    front_force_max = _max_abs_component(bearing_records, ("Pu_x_kN", "Pu_z_kN"))
+    arrow_max = min(max(max(width_x_mm, height_z_mm) * 0.075, 260.0), 760.0)
+    arrow_min = min(190.0, arrow_max * 0.55)
+    moment_radius = max(135.0, bearing_size_mm * 0.72)
+    for row in bearing_records:
+        x = float(row.get("x_mm", 0.0))
+        z = float(row.get("z_mm", height_z_mm))
+        px = float(row.get("Pu_x_kN", 0.0))
+        pz = float(row.get("Pu_z_kN", 0.0))
+        my = float(row.get("Mu_y_kNm", 0.0))
+        _add_load_arrow(
+            fig,
+            x=x,
+            y=z + bearing_h + half * 0.45,
+            dx=_scaled_load_delta(px, front_force_max, arrow_max, arrow_min),
+            dy=0.0,
+            label=_load_label("Pu_x", px, "kN"),
+            color=COLORS["axis_x"],
+        )
+        _add_load_arrow(
+            fig,
+            x=x + half * 0.62,
+            y=z + bearing_h + half * 0.35,
+            dx=0.0,
+            dy=-_scaled_load_delta(pz, front_force_max, arrow_max, arrow_min),
+            label=_load_label("Pu_z", pz, "kN"),
+            color=COLORS["axis_z"],
+        )
+        _add_moment_arc(
+            fig,
+            x=x - half * 0.58,
+            y=z + bearing_h + half * 0.55,
+            radius=moment_radius,
+            moment=my,
+            label="Mu_y",
+            color="#7c3aed",
+        )
+    _add_load_legend(fig, "Front view loads: Pu_x blue, Pu_z green, Mu_y purple")
 
     axis_gap = max(800.0, max(width_x_mm, height_z_mm) * 0.12)
     axis_origin_x = -pile_x - axis_gap
@@ -1163,8 +1398,8 @@ def front_view(
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
     pad = max(width_x_mm, height_z_mm) * 0.10
-    fig.update_xaxes(range=[axis_origin_x - pad * 0.25, pile_x + pad])
-    fig.update_yaxes(range=[axis_origin_z - pad * 0.25, height_z_mm + bearing_h + pad * 0.35])
+    fig.update_xaxes(range=[axis_origin_x - pad * 0.25, pile_x + pad + arrow_max * 0.35])
+    fig.update_yaxes(range=[axis_origin_z - pad * 0.25, height_z_mm + bearing_h + pad * 0.35 + arrow_max])
     return _finish_view(fig, "Front view", "x (mm)", "z (mm)", show_zero_axes=False)
 
 
@@ -1178,6 +1413,7 @@ def side_view(
     bearing_size_mm: float,
 ) -> go.Figure:
     fig = go.Figure()
+    bearing_records = list(bearings)
     pile_y = depth_y_mm / 2.0 + pilecap_overhang_mm
     abut_y = depth_y_mm / 2.0
     half = bearing_size_mm / 2.0
@@ -1186,12 +1422,51 @@ def side_view(
     _add_rect(fig, x0=-pile_y, x1=pile_y, y0=-pilecap_thickness_mm, y1=0, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
     _add_rect(fig, x0=-abut_y, x1=abut_y, y0=0, y1=height_z_mm, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
 
-    for row in bearings:
+    for row in bearing_records:
         y = float(row.get("y_mm", 0.0))
         z = float(row.get("z_mm", height_z_mm))
         name = str(row.get("name", "B"))
         _add_rect(fig, x0=y - half, x1=y + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
         fig.add_annotation(x=y, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
+
+    side_force_max = _max_abs_component(bearing_records, ("Pu_y_kN", "Pu_z_kN"))
+    arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.095, 240.0), 720.0)
+    arrow_min = min(180.0, arrow_max * 0.55)
+    moment_radius = max(135.0, bearing_size_mm * 0.72)
+    for row in bearing_records:
+        y = float(row.get("y_mm", 0.0))
+        z = float(row.get("z_mm", height_z_mm))
+        py = float(row.get("Pu_y_kN", 0.0))
+        pz = float(row.get("Pu_z_kN", 0.0))
+        mx = float(row.get("Mu_x_kNm", 0.0))
+        _add_load_arrow(
+            fig,
+            x=y,
+            y=z + bearing_h + half * 0.45,
+            dx=_scaled_load_delta(py, side_force_max, arrow_max, arrow_min),
+            dy=0.0,
+            label=_load_label("Pu_y", py, "kN"),
+            color=COLORS["axis_y"],
+        )
+        _add_load_arrow(
+            fig,
+            x=y + half * 0.62,
+            y=z + bearing_h + half * 0.35,
+            dx=0.0,
+            dy=-_scaled_load_delta(pz, side_force_max, arrow_max, arrow_min),
+            label=_load_label("Pu_z", pz, "kN"),
+            color=COLORS["axis_z"],
+        )
+        _add_moment_arc(
+            fig,
+            x=y - half * 0.58,
+            y=z + bearing_h + half * 0.55,
+            radius=moment_radius,
+            moment=mx,
+            label="Mu_x",
+            color="#7c3aed",
+        )
+    _add_load_legend(fig, "Side view loads: Pu_y red, Pu_z green, Mu_x purple")
 
     axis_gap = max(800.0, max(depth_y_mm, height_z_mm) * 0.12)
     axis_origin_y = -pile_y - axis_gap
@@ -1202,8 +1477,8 @@ def side_view(
     _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
     pad = max(depth_y_mm, height_z_mm) * 0.10
-    fig.update_xaxes(range=[axis_origin_y - pad * 0.25, pile_y + pad])
-    fig.update_yaxes(range=[axis_origin_z - pad * 0.25, height_z_mm + bearing_h + pad * 0.35])
+    fig.update_xaxes(range=[axis_origin_y - pad * 0.25, pile_y + pad + arrow_max * 0.35])
+    fig.update_yaxes(range=[axis_origin_z - pad * 0.25, height_z_mm + bearing_h + pad * 0.35 + arrow_max])
     return _finish_view(fig, "Side view", "y (mm)", "z (mm)", show_zero_axes=False)
 
 
