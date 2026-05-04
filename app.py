@@ -65,6 +65,10 @@ class SectionCheck:
     mux_ratio: float
     muy_ratio: float
     biaxial_ratio: float
+    biaxial_linear_ratio: float
+    load_contour_ratio: float
+    load_contour_alpha: float
+    biaxial_method: str
     governing_ratio: float
     status: str
     curve_x: list[dict[str, float]]
@@ -407,6 +411,8 @@ def analyze_section(
     mux_knm: float,
     muy_knm: float,
     params: CodeParameters,
+    biaxial_method: str = "Load contour",
+    load_contour_alpha: float = 1.50,
     sample_count: int = 180,
 ) -> SectionCheck:
     bars = make_perimeter_bars(
@@ -448,7 +454,9 @@ def analyze_section(
     axial_ratio = pu_kn / pmax if pmax > 0 else math.inf
     mux_ratio = abs(mux_knm) / cap_x if cap_x > 0 else math.inf
     muy_ratio = abs(muy_knm) / cap_y if cap_y > 0 else math.inf
-    biaxial_ratio = mux_ratio + muy_ratio
+    biaxial_linear_ratio = mux_ratio + muy_ratio
+    load_contour_ratio = mux_ratio**load_contour_alpha + muy_ratio**load_contour_alpha
+    biaxial_ratio = load_contour_ratio if biaxial_method == "Load contour" else biaxial_linear_ratio
     governing_ratio = max(axial_ratio, biaxial_ratio)
     status = "OK" if governing_ratio <= 1.0 else "NG"
 
@@ -468,6 +476,10 @@ def analyze_section(
         mux_ratio=mux_ratio,
         muy_ratio=muy_ratio,
         biaxial_ratio=biaxial_ratio,
+        biaxial_linear_ratio=biaxial_linear_ratio,
+        load_contour_ratio=load_contour_ratio,
+        load_contour_alpha=load_contour_alpha,
+        biaxial_method=biaxial_method,
         governing_ratio=governing_ratio,
         status=status,
         curve_x=curve_x,
@@ -491,6 +503,8 @@ def find_reinforcement(
     params: CodeParameters,
     rho_min_percent: float,
     rho_max_percent: float,
+    biaxial_method: str = "Load contour",
+    load_contour_alpha: float = 1.50,
     max_bars_x_face: int = 28,
     max_bars_y_face: int = 18,
     sample_count: int = 120,
@@ -523,6 +537,8 @@ def find_reinforcement(
                 mux_knm=mux_knm,
                 muy_knm=muy_knm,
                 params=params,
+                biaxial_method=biaxial_method,
+                load_contour_alpha=load_contour_alpha,
                 sample_count=sample_count,
             )
         except ValueError:
@@ -787,6 +803,89 @@ def interaction_plot(check: SectionCheck, pu_kn: float, mux_knm: float, muy_knm:
     return fig
 
 
+def biaxial_load_contour_plot(check: SectionCheck, mux_knm: float, muy_knm: float) -> go.Figure:
+    cap_x = max(check.phi_mnx_at_pu_knm, 1e-9)
+    cap_y = max(check.phi_mny_at_pu_knm, 1e-9)
+    alpha = check.load_contour_alpha
+    theta_values = np.linspace(0.0, 2.0 * math.pi, 241)
+    contour_x = []
+    contour_y = []
+    for theta in theta_values:
+        c = math.cos(theta)
+        s = math.sin(theta)
+        denom = (abs(c) / cap_x) ** alpha + (abs(s) / cap_y) ** alpha
+        radius = denom ** (-1.0 / alpha)
+        contour_x.append(radius * c)
+        contour_y.append(radius * s)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=contour_x,
+            y=contour_y,
+            mode="lines",
+            fill="toself",
+            fillcolor="rgba(15, 118, 110, 0.08)",
+            name=f"load contour alpha={alpha:.2f}",
+            line={"color": "#0f766e", "width": 3},
+        )
+    )
+    if alpha > 1.01:
+        diamond_x = [cap_x, 0.0, -cap_x, 0.0, cap_x]
+        diamond_y = [0.0, cap_y, 0.0, -cap_y, 0.0]
+        fig.add_trace(
+            go.Scatter(
+                x=diamond_x,
+                y=diamond_y,
+                mode="lines",
+                name="linear contour alpha=1.00",
+                line={"color": "#94a3b8", "width": 2, "dash": "dash"},
+            )
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0, mux_knm],
+            y=[0.0, muy_knm],
+            mode="lines+markers",
+            name="demand",
+            line={"color": "#dc2626", "width": 3},
+            marker={"size": [7, 13], "color": ["#334155", "#dc2626"], "symbol": ["circle", "x"]},
+            hovertemplate="Mux=%{x:.1f} kN-m<br>Muy=%{y:.1f} kN-m<extra></extra>",
+        )
+    )
+    fig.add_annotation(
+        x=mux_knm,
+        y=muy_knm,
+        text=f"U = {check.load_contour_ratio:.3f}",
+        showarrow=True,
+        arrowhead=2,
+        ax=28 if mux_knm <= 0 else -28,
+        ay=28 if muy_knm <= 0 else -28,
+        bgcolor="rgba(255,255,255,0.82)",
+    )
+    pad = 1.16 * max(cap_x, cap_y, abs(mux_knm), abs(muy_knm), 1.0)
+    fig.update_layout(
+        title={"text": f"Biaxial load contour at Pu = {check.axial_ratio * check.phi_pmax_kn:,.0f} kN", "x": 0.02, "xanchor": "left"},
+        height=500,
+        margin={"l": 24, "r": 24, "t": 54, "b": 24},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        legend={"orientation": "h", "y": 1.02, "x": 0.52, "xanchor": "center"},
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+    )
+    fig.update_xaxes(title="Mux (kN-m)", range=[-pad, pad], gridcolor=COLORS["grid"], zeroline=True, zerolinecolor="#111827")
+    fig.update_yaxes(
+        title="Muy (kN-m)",
+        range=[-pad, pad],
+        gridcolor=COLORS["grid"],
+        zeroline=True,
+        zerolinecolor="#111827",
+        scaleanchor="x",
+        scaleratio=1,
+    )
+    return fig
+
+
 def load_vector_plot(resultant_mx: float, resultant_my: float) -> go.Figure:
     magnitude = math.hypot(resultant_mx, resultant_my)
     fig = go.Figure()
@@ -988,6 +1087,17 @@ with st.sidebar:
         eps_cu=eps_cu,
     )
 
+    biaxial_method = st.radio("Biaxial check method", ["Load contour", "Linear"], horizontal=True)
+    load_contour_alpha = st.number_input(
+        "load contour alpha",
+        min_value=1.00,
+        max_value=2.00,
+        value=1.50,
+        step=0.05,
+        disabled=biaxial_method != "Load contour",
+        help="alpha=1.0 equals the conservative linear interaction. Larger alpha gives a rounded load contour.",
+    )
+
     st.header("Geometry")
     width_x_mm = st.number_input("Abutment width along x (mm)", min_value=800.0, value=9000.0, step=100.0)
     depth_y_mm = st.number_input("Abutment thickness along y (mm)", min_value=300.0, value=1200.0, step=50.0)
@@ -1042,6 +1152,7 @@ if "bearing_table" not in st.session_state or reset_table:
         height_z_mm,
         row_spacing_y_mm,
     )
+    st.session_state.bearing_editor_version = st.session_state.get("bearing_editor_version", 0) + 1
 elif len(st.session_state.bearing_table) != expected_bearing_count:
     st.session_state.bearing_table = default_bearings(
         int(bearings_per_row),
@@ -1050,10 +1161,14 @@ elif len(st.session_state.bearing_table) != expected_bearing_count:
         height_z_mm,
         row_spacing_y_mm,
     )
+    st.session_state.bearing_editor_version = st.session_state.get("bearing_editor_version", 0) + 1
+
+editor_key = f"bearing_load_editor_{st.session_state.get('bearing_editor_version', 0)}"
 
 edited = st.data_editor(
     st.session_state.bearing_table,
-    num_rows="dynamic",
+    key=editor_key,
+    num_rows="fixed",
     width="stretch",
     hide_index=True,
     column_config={
@@ -1069,7 +1184,8 @@ edited = st.data_editor(
     },
 )
 bearings_df = clean_bearings(edited)
-st.session_state.bearing_table = bearings_df
+if not bearings_df.equals(st.session_state.bearing_table):
+    st.session_state.bearing_table = bearings_df
 records = bearings_df.to_dict("records")
 resultant = combine_bearing_loads(records)
 
@@ -1098,6 +1214,8 @@ try:
                     params=params,
                     rho_min_percent=rho_min_percent,
                     rho_max_percent=rho_max_percent,
+                    biaxial_method=biaxial_method,
+                    load_contour_alpha=load_contour_alpha,
                 )
             if check is None:
                 design_error = "No reinforcement layout passed within the selected auto limits."
@@ -1116,6 +1234,8 @@ try:
             mux_knm=resultant.design_mux_knm,
             muy_knm=resultant.design_muy_knm,
             params=params,
+            biaxial_method=biaxial_method,
+            load_contour_alpha=load_contour_alpha,
         )
 except Exception as exc:  # noqa: BLE001
     design_error = str(exc)
@@ -1139,7 +1259,9 @@ with tabs[0]:
                 ["Axial Pu / phi Pmax", check.axial_ratio],
                 ["Mux / phi Mnx(Pu)", check.mux_ratio],
                 ["Muy / phi Mny(Pu)", check.muy_ratio],
-                ["Linear biaxial interaction", check.biaxial_ratio],
+                ["Linear biaxial interaction", check.biaxial_linear_ratio],
+                [f"Load contour interaction, alpha={check.load_contour_alpha:.2f}", check.load_contour_ratio],
+                [f"Selected biaxial method: {check.biaxial_method}", check.biaxial_ratio],
                 ["Governing utilization", check.governing_ratio],
             ],
             columns=["Check", "Ratio"],
@@ -1204,6 +1326,10 @@ with tabs[2]:
                 interaction_plot(check, resultant.pu_kn, resultant.design_mux_knm, resultant.design_muy_knm),
                 width="stretch",
             )
+        st.plotly_chart(
+            biaxial_load_contour_plot(check, resultant.mux_knm, resultant.muy_knm),
+            width="stretch",
+        )
         bar_table = pd.DataFrame(
             [{"bar": idx + 1, "x_mm": bar.x_mm, "y_mm": bar.y_mm, "area_mm2": bar.area_mm2} for idx, bar in enumerate(check.bars)]
         )
@@ -1230,9 +1356,16 @@ with tabs[3]:
         **RC section check**
 
         The app uses Whitney stress block strain compatibility for uniaxial `P-Mx` and `P-My` curves.
-        Biaxial bending is checked with a conservative linear interaction:
+        Biaxial bending can be checked with the conservative linear interaction:
 
         `|Mux| / phi Mnx(Pu) + |Muy| / phi Mny(Pu) <= 1.0`
+
+        Or with the load contour method at the same axial load level:
+
+        `(|Mux| / phi Mnx(Pu))^alpha + (|Muy| / phi Mny(Pu))^alpha <= 1.0`
+
+        The biaxial contour graph is an `Mux-Muy` slice at the current `Pu`.
+        The uniaxial P-M graph overlays two separate curves: `P-Mx` and `P-My`.
 
         ACI style uses strain-based phi interpolation. AASHTO LRFD style uses editable defaults with axial-to-flexural phi interpolation.
         Pile cap geometry is drawn only as context and is not designed.
