@@ -21,6 +21,26 @@ REBAR_FY_BY_DIA_MPA = {
     32.0: 490.0,
 }
 
+ALPHA_GUIDANCE_MD = """
+**Load contour alpha guide**
+
+`alpha = 1.00` gives the linear biaxial interaction:
+`Mx/Mnx + My/Mny <= 1.0`. This is conservative and matches the straight-line
+moment interaction form used in AASHTO LRFD Article 5.6.4.5 for the applicable
+low-axial-load case.
+
+`alpha = 1.50` gives a rounded load contour:
+`(Mx/Mnx)^alpha + (My/Mny)^alpha <= 1.0`. This is a common preliminary
+Bresler/PCA-style approximation for biaxial flexure and is usually less
+conservative than `alpha = 1.00`.
+
+Code references to verify for final design: ACI 318-19 Chapter 21 and Chapter 22
+(strength reduction factors and sectional strength for axial load with flexure);
+AASHTO LRFD Bridge Design Specifications Article 5.6.4.5 (biaxial flexure).
+ACI/AASHTO do not prescribe one universal `alpha = 1.50`; treat it as an
+engineering approximation unless the project specification explicitly accepts it.
+"""
+
 
 def rebar_fy_mpa(diameter_mm: float) -> float:
     key = float(int(round(diameter_mm)))
@@ -731,7 +751,14 @@ def _add_axis_arrow(
     )
 
 
-def _finish_view(fig: go.Figure, title: str, x_title: str, y_title: str) -> go.Figure:
+def _finish_view(
+    fig: go.Figure,
+    title: str,
+    x_title: str,
+    y_title: str,
+    *,
+    show_zero_axes: bool = True,
+) -> go.Figure:
     fig.update_layout(
         title={"text": title, "x": 0.02, "xanchor": "left"},
         height=480,
@@ -745,7 +772,7 @@ def _finish_view(fig: go.Figure, title: str, x_title: str, y_title: str) -> go.F
         title=x_title,
         showgrid=True,
         gridcolor=COLORS["grid"],
-        zeroline=True,
+        zeroline=show_zero_axes,
         zerolinecolor="#111827",
         zerolinewidth=1,
     )
@@ -753,7 +780,7 @@ def _finish_view(fig: go.Figure, title: str, x_title: str, y_title: str) -> go.F
         title=y_title,
         showgrid=True,
         gridcolor=COLORS["grid"],
-        zeroline=True,
+        zeroline=show_zero_axes,
         zerolinecolor="#111827",
         zerolinewidth=1,
         scaleanchor="x",
@@ -787,16 +814,18 @@ def plan_view(
         _add_rect(fig, x0=x - half, x1=x + half, y0=y - half, y1=y + half, fillcolor=COLORS["bearing"], linecolor="#065f5b", opacity=0.95)
         fig.add_annotation(x=x, y=y, text=name, showarrow=False, font={"color": "white", "size": 11})
 
-    axis_origin_x = -pile_x * 0.86
-    axis_origin_y = -pile_y * 0.86
-    arrow = max(width_x_mm, depth_y_mm) * 0.22
-    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
-    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow, label="+y", color=COLORS["axis_y"])
+    axis_gap = max(650.0, max(width_x_mm, depth_y_mm) * 0.12)
+    axis_origin_x = -pile_x - axis_gap
+    axis_origin_y = -pile_y - axis_gap
+    arrow_x = min(max(width_x_mm * 0.12, 450.0), axis_gap * 0.75)
+    arrow_y = min(max(depth_y_mm * 0.35, 250.0), axis_gap * 0.75)
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow_y, label="+y", color=COLORS["axis_y"])
 
     pad = max(width_x_mm, depth_y_mm) * 0.12
-    fig.update_xaxes(range=[-pile_x - pad, pile_x + pad])
-    fig.update_yaxes(range=[-pile_y - pad, pile_y + pad])
-    return _finish_view(fig, "Section plan at bearing level", "x (mm)", "y (mm)")
+    fig.update_xaxes(range=[axis_origin_x - pad * 0.25, pile_x + pad])
+    fig.update_yaxes(range=[axis_origin_y - pad * 0.25, pile_y + pad])
+    return _finish_view(fig, "Section plan at bearing level", "x (mm)", "y (mm)", show_zero_axes=False)
 
 
 def front_view(
@@ -824,16 +853,18 @@ def front_view(
         _add_rect(fig, x0=x - half, x1=x + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
         fig.add_annotation(x=x, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
-    axis_origin_x = -pile_x * 0.86
-    axis_origin_z = -pilecap_thickness_mm * 0.72
-    arrow = max(width_x_mm, height_z_mm) * 0.16
-    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
-    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=0, dy=arrow, label="+z", color=COLORS["axis_z"])
+    axis_gap = max(800.0, max(width_x_mm, height_z_mm) * 0.12)
+    axis_origin_x = -pile_x - axis_gap
+    axis_origin_z = -pilecap_thickness_mm - axis_gap
+    arrow_x = min(max(width_x_mm * 0.12, 600.0), axis_gap * 0.75)
+    arrow_z = min(max(height_z_mm * 0.14, 450.0), axis_gap * 0.75)
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
     pad = max(width_x_mm, height_z_mm) * 0.10
-    fig.update_xaxes(range=[-pile_x - pad, pile_x + pad])
-    fig.update_yaxes(range=[-pilecap_thickness_mm - pad * 0.35, height_z_mm + bearing_h + pad * 0.35])
-    return _finish_view(fig, "Front view", "x (mm)", "z (mm)")
+    fig.update_xaxes(range=[axis_origin_x - pad * 0.25, pile_x + pad])
+    fig.update_yaxes(range=[axis_origin_z - pad * 0.25, height_z_mm + bearing_h + pad * 0.35])
+    return _finish_view(fig, "Front view", "x (mm)", "z (mm)", show_zero_axes=False)
 
 
 def side_view(
@@ -861,16 +892,18 @@ def side_view(
         _add_rect(fig, x0=y - half, x1=y + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
         fig.add_annotation(x=y, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
-    axis_origin_y = -pile_y * 0.86
-    axis_origin_z = -pilecap_thickness_mm * 0.72
-    arrow = max(depth_y_mm, height_z_mm) * 0.16
-    _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=arrow, dy=0, label="+y", color=COLORS["axis_y"])
-    _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=0, dy=arrow, label="+z", color=COLORS["axis_z"])
+    axis_gap = max(800.0, max(depth_y_mm, height_z_mm) * 0.12)
+    axis_origin_y = -pile_y - axis_gap
+    axis_origin_z = -pilecap_thickness_mm - axis_gap
+    arrow_y = min(max(depth_y_mm * 0.35, 350.0), axis_gap * 0.75)
+    arrow_z = min(max(height_z_mm * 0.14, 450.0), axis_gap * 0.75)
+    _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=arrow_y, dy=0, label="+y", color=COLORS["axis_y"])
+    _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
     pad = max(depth_y_mm, height_z_mm) * 0.10
-    fig.update_xaxes(range=[-pile_y - pad, pile_y + pad])
-    fig.update_yaxes(range=[-pilecap_thickness_mm - pad * 0.35, height_z_mm + bearing_h + pad * 0.35])
-    return _finish_view(fig, "Side view", "y (mm)", "z (mm)")
+    fig.update_xaxes(range=[axis_origin_y - pad * 0.25, pile_y + pad])
+    fig.update_yaxes(range=[axis_origin_z - pad * 0.25, height_z_mm + bearing_h + pad * 0.35])
+    return _finish_view(fig, "Side view", "y (mm)", "z (mm)", show_zero_axes=False)
 
 
 def reinforcement_plan(check: SectionCheck) -> go.Figure:
@@ -1322,6 +1355,8 @@ with st.sidebar:
         disabled=biaxial_method != "Load contour",
         help="alpha=1.0 equals the conservative linear interaction. Larger alpha gives a rounded load contour.",
     )
+    with st.expander("Alpha guidance and code reference", expanded=False):
+        st.markdown(ALPHA_GUIDANCE_MD)
 
     st.header("Geometry")
     width_x_mm = st.number_input("Abutment width along x (mm)", min_value=800.0, value=9000.0, step=100.0)
@@ -1626,6 +1661,13 @@ with tabs[3]:
         Or with the load contour method at the same axial load level:
 
         `(|Mux| / phi Mnx(Pu))^alpha + (|Muy| / phi Mny(Pu))^alpha <= 1.0`
+
+        For `alpha = 1.00`, this reduces to the conservative linear moment interaction.
+        For `alpha = 1.50`, the contour is rounded and typically less conservative; this value is a common
+        Bresler/PCA-style approximation and should be accepted by the project reviewer before final use.
+        ACI 318-19 Chapter 21 and Chapter 22 govern strength reduction factors and sectional strength for axial load
+        with flexure. AASHTO LRFD Article 5.6.4.5 covers biaxial flexure checks; it does not make `alpha = 1.50`
+        a universal requirement.
 
         The biaxial contour graph is an `Mux-Muy` slice at the current `Pu`.
         The uniaxial P-M graph overlays two separate curves: `P-Mx` and `P-My`.
