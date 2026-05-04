@@ -11,6 +11,24 @@ import streamlit as st
 
 
 Axis = Literal["x", "y"]
+REBAR_DIAMETERS_MM = [12.0, 16.0, 20.0, 25.0, 28.0, 32.0]
+REBAR_FY_BY_DIA_MPA = {
+    12.0: 390.0,
+    16.0: 390.0,
+    20.0: 390.0,
+    25.0: 390.0,
+    28.0: 390.0,
+    32.0: 490.0,
+}
+
+
+def rebar_fy_mpa(diameter_mm: float) -> float:
+    key = float(int(round(diameter_mm)))
+    return REBAR_FY_BY_DIA_MPA[key]
+
+
+def rebar_label(diameter_mm: float) -> str:
+    return f"DB{int(diameter_mm)}"
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,7 @@ class SectionCheck:
     rho_percent: float
     bar_count: int
     bar_dia_mm: float
+    fy_mpa: float
     bars_x_face: int
     bars_y_face: int
     phi_pmax_kn: float
@@ -467,6 +486,7 @@ def analyze_section(
         rho_percent=rho,
         bar_count=len(bars),
         bar_dia_mm=bar_dia_mm,
+        fy_mpa=fy_mpa,
         bars_x_face=bars_x_face,
         bars_y_face=bars_y_face,
         phi_pmax_kn=pmax,
@@ -495,7 +515,6 @@ def find_reinforcement(
     cover_mm: float,
     bar_dia_options_mm: Iterable[float],
     fc_mpa: float,
-    fy_mpa: float,
     es_mpa: float,
     pu_kn: float,
     mux_knm: float,
@@ -531,7 +550,7 @@ def find_reinforcement(
                 bars_x_face=nx,
                 bars_y_face=ny,
                 fc_mpa=fc_mpa,
-                fy_mpa=fy_mpa,
+                fy_mpa=rebar_fy_mpa(dia),
                 es_mpa=es_mpa,
                 pu_kn=pu_kn,
                 mux_knm=mux_knm,
@@ -573,9 +592,11 @@ def _add_rect(
     linecolor: str,
     dash: str | None = None,
     opacity: float = 1.0,
+    layer: str = "below",
 ) -> None:
     fig.add_shape(
         type="rect",
+        layer=layer,
         x0=x0,
         x1=x1,
         y0=y0,
@@ -764,22 +785,47 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
     x = check.width_x_mm / 2.0
     y = check.depth_y_mm / 2.0
     _add_rect(fig, x0=-x, x1=x, y0=-y, y1=y, fillcolor="#f8fafc", linecolor=COLORS["concrete_line"])
-    marker_size = max(7, min(16, check.bar_dia_mm * 0.45))
+    marker_size = max(12, min(24, check.bar_dia_mm * 0.72))
     fig.add_trace(
         go.Scatter(
             x=[bar.x_mm for bar in check.bars],
             y=[bar.y_mm for bar in check.bars],
             mode="markers",
-            marker={"size": marker_size, "color": COLORS["steel"], "line": {"color": "#7c2d12", "width": 1}},
-            hovertemplate="x=%{x:.0f} mm<br>y=%{y:.0f} mm<extra></extra>",
+            marker={
+                "size": marker_size,
+                "color": "#f97316",
+                "line": {"color": "#7c2d12", "width": 2.5},
+                "opacity": 1.0,
+            },
+            hovertemplate="DB%{customdata[0]:.0f}<br>x=%{x:.0f} mm<br>y=%{y:.0f} mm<extra></extra>",
+            customdata=[[check.bar_dia_mm] for _ in check.bars],
         )
+    )
+    label = (
+        f"Top/bottom faces: {check.bars_x_face} {rebar_label(check.bar_dia_mm)} each<br>"
+        f"Left/right faces: {check.bars_y_face} {rebar_label(check.bar_dia_mm)} each<br>"
+        f"Total: {check.bar_count} bars, fy = {check.fy_mpa:.0f} MPa"
+    )
+    fig.add_annotation(
+        x=-x,
+        y=y + max(check.depth_y_mm, 450.0) * 0.28,
+        text=label,
+        showarrow=False,
+        xanchor="left",
+        yanchor="bottom",
+        align="left",
+        bgcolor="rgba(255,255,255,0.88)",
+        bordercolor="#cbd5e1",
+        borderwidth=1,
+        borderpad=6,
+        font={"color": "#172033", "size": 13},
     )
     arrow = max(check.width_x_mm, check.depth_y_mm) * 0.18
     _add_axis_arrow(fig, x=-x * 0.78, y=-y * 0.78, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
     _add_axis_arrow(fig, x=-x * 0.78, y=-y * 0.78, dx=0, dy=arrow, label="+y", color=COLORS["axis_y"])
-    pad = max(check.width_x_mm, check.depth_y_mm) * 0.08
+    pad = max(check.width_x_mm, check.depth_y_mm) * 0.12
     fig.update_xaxes(range=[-x - pad, x + pad])
-    fig.update_yaxes(range=[-y - pad, y + pad])
+    fig.update_yaxes(range=[-y - pad, y + pad * 1.65])
     return _finish_view(fig, "Base section reinforcement", "x (mm)", "y (mm)")
 
 
@@ -1052,8 +1098,8 @@ with st.sidebar:
     base_params = default_code_parameters(code_choice)
 
     fc_mpa = st.number_input("f'c (MPa)", min_value=15.0, max_value=100.0, value=35.0, step=1.0)
-    fy_mpa = st.number_input("fy (MPa)", min_value=240.0, max_value=700.0, value=420.0, step=10.0)
     es_mpa = st.number_input("Es (MPa)", min_value=180000.0, max_value=220000.0, value=200000.0, step=5000.0)
+    st.caption("Rebar fy is assigned automatically: DB12/16/20/25/28 = 390 MPa, DB32 = 490 MPa.")
 
     with st.expander("Resistance factor settings", expanded=False):
         phi_compression = st.number_input(
@@ -1113,14 +1159,21 @@ with st.sidebar:
     rho_max_percent = st.number_input("maximum rho for auto (%)", min_value=0.1, max_value=10.0, value=4.00, step=0.10)
 
     if mode == "Manual check":
-        bar_dia_mm = st.selectbox("bar diameter (mm)", [16.0, 20.0, 25.0, 28.0, 32.0, 36.0], index=2)
+        bar_dia_mm = st.selectbox(
+            "bar diameter",
+            REBAR_DIAMETERS_MM,
+            index=3,
+            format_func=lambda dia: f"{rebar_label(dia)}  fy={rebar_fy_mpa(dia):.0f} MPa",
+        )
+        selected_fy_mpa = rebar_fy_mpa(float(bar_dia_mm))
         bars_x_face = st.number_input("bars on each x-face", min_value=2, max_value=40, value=12, step=1)
         bars_y_face = st.number_input("bars on each y-face", min_value=2, max_value=24, value=3, step=1)
     else:
         dia_options = st.multiselect(
-            "auto bar diameters (mm)",
-            [16.0, 20.0, 25.0, 28.0, 32.0, 36.0],
+            "auto bar diameters",
+            REBAR_DIAMETERS_MM,
             default=[20.0, 25.0, 28.0, 32.0],
+            format_func=lambda dia: f"{rebar_label(dia)}  fy={rebar_fy_mpa(dia):.0f} MPa",
         )
 
 
@@ -1206,7 +1259,6 @@ try:
                     cover_mm=cover_mm,
                     bar_dia_options_mm=tuple(dia_options),
                     fc_mpa=fc_mpa,
-                    fy_mpa=fy_mpa,
                     es_mpa=es_mpa,
                     pu_kn=resultant.pu_kn,
                     mux_knm=resultant.design_mux_knm,
@@ -1228,7 +1280,7 @@ try:
             bars_x_face=int(bars_x_face),
             bars_y_face=int(bars_y_face),
             fc_mpa=fc_mpa,
-            fy_mpa=fy_mpa,
+            fy_mpa=selected_fy_mpa,
             es_mpa=es_mpa,
             pu_kn=resultant.pu_kn,
             mux_knm=resultant.design_mux_knm,
@@ -1269,7 +1321,7 @@ with tabs[0]:
         st.dataframe(summary, width="stretch", hide_index=True)
 
         rebar_text = (
-            f"{check.bar_count} bars DB{check.bar_dia_mm:.0f}: "
+            f"{check.bar_count} bars {rebar_label(check.bar_dia_mm)} fy={check.fy_mpa:.0f} MPa: "
             f"{check.bars_x_face} bars on each x-face, "
             f"{check.bars_y_face} bars on each y-face"
         )
@@ -1366,6 +1418,8 @@ with tabs[3]:
 
         The biaxial contour graph is an `Mux-Muy` slice at the current `Pu`.
         The uniaxial P-M graph overlays two separate curves: `P-Mx` and `P-My`.
+        Rebar yield strength is assigned by bar size: DB12, DB16, DB20, DB25, and DB28 use fy = 390 MPa;
+        DB32 uses fy = 490 MPa. The current version assumes one vertical bar size for the checked section.
 
         ACI style uses strain-based phi interpolation. AASHTO LRFD style uses editable defaults with axial-to-flexural phi interpolation.
         Pile cap geometry is drawn only as context and is not designed.
