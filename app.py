@@ -80,6 +80,11 @@ class SectionCheck:
     clear_spacing_x_mm: float
     clear_spacing_y_mm: float
     min_clear_spacing_mm: float
+    center_spacing_x_mm: float
+    center_spacing_y_mm: float
+    max_center_spacing_mm: float
+    max_spacing_advisory_mm: float
+    spacing_status: str
     phi_pmax_kn: float
     phi_mnx_at_pu_knm: float
     phi_mny_at_pu_knm: float
@@ -141,6 +146,23 @@ def clear_spacing_by_face_mm(
     clear_x = 2.0 * edge_x / (bars_x_face - 1) - bar_dia_mm
     clear_y = 2.0 * edge_y / (bars_y_face - 1) - bar_dia_mm
     return clear_x, clear_y, min(clear_x, clear_y)
+
+
+def center_spacing_by_face_mm(
+    width_x_mm: float,
+    depth_y_mm: float,
+    cover_mm: float,
+    bar_dia_mm: float,
+    bars_x_face: int,
+    bars_y_face: int,
+) -> tuple[float, float, float]:
+    edge_x = width_x_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    edge_y = depth_y_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    if bars_x_face <= 1 or bars_y_face <= 1 or edge_x <= 0 or edge_y <= 0:
+        return math.inf, math.inf, math.inf
+    spacing_x = 2.0 * edge_x / (bars_x_face - 1)
+    spacing_y = 2.0 * edge_y / (bars_y_face - 1)
+    return spacing_x, spacing_y, max(spacing_x, spacing_y)
 
 
 def layout_balance_penalty(
@@ -469,6 +491,7 @@ def analyze_section(
     params: CodeParameters,
     biaxial_method: str = "Load contour",
     load_contour_alpha: float = 1.50,
+    max_spacing_advisory_mm: float = math.inf,
     sample_count: int = 180,
 ) -> SectionCheck:
     bars = make_perimeter_bars(
@@ -490,6 +513,15 @@ def analyze_section(
         bars_x_face,
         bars_y_face,
     )
+    spacing_x, spacing_y, max_spacing = center_spacing_by_face_mm(
+        width_x_mm,
+        depth_y_mm,
+        cover_mm,
+        bar_dia_mm,
+        bars_x_face,
+        bars_y_face,
+    )
+    spacing_status = "OK" if max_spacing <= max_spacing_advisory_mm else "NG"
     pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
     curve_x = interaction_curve(
         width_x_mm=width_x_mm,
@@ -537,6 +569,11 @@ def analyze_section(
         clear_spacing_x_mm=clear_x,
         clear_spacing_y_mm=clear_y,
         min_clear_spacing_mm=min_clear,
+        center_spacing_x_mm=spacing_x,
+        center_spacing_y_mm=spacing_y,
+        max_center_spacing_mm=max_spacing,
+        max_spacing_advisory_mm=max_spacing_advisory_mm,
+        spacing_status=spacing_status,
         phi_pmax_kn=pmax,
         phi_mnx_at_pu_knm=cap_x,
         phi_mny_at_pu_knm=cap_y,
@@ -573,6 +610,8 @@ def find_reinforcement(
     biaxial_method: str = "Load contour",
     load_contour_alpha: float = 1.50,
     min_clear_spacing_mm: float = 75.0,
+    max_spacing_advisory_mm: float = math.inf,
+    enforce_max_spacing: bool = True,
     max_bars_x_face: int = 28,
     max_bars_y_face: int = 18,
     sample_count: int = 120,
@@ -587,8 +626,9 @@ def find_reinforcement(
                 as_total = bar_count * area
                 rho = as_total / ag * 100.0
                 _, _, min_clear = clear_spacing_by_face_mm(width_x_mm, depth_y_mm, cover_mm, dia, nx, ny)
+                _, _, max_center = center_spacing_by_face_mm(width_x_mm, depth_y_mm, cover_mm, dia, nx, ny)
                 if rho_min_percent <= rho <= rho_max_percent:
-                    if min_clear >= min_clear_spacing_mm:
+                    if min_clear >= min_clear_spacing_mm and (not enforce_max_spacing or max_center <= max_spacing_advisory_mm):
                         balance = layout_balance_penalty(width_x_mm, depth_y_mm, cover_mm, dia, nx, ny)
                         candidates.append((as_total, balance, dia, nx, ny))
 
@@ -610,6 +650,7 @@ def find_reinforcement(
                 params=params,
                 biaxial_method=biaxial_method,
                 load_contour_alpha=load_contour_alpha,
+                max_spacing_advisory_mm=max_spacing_advisory_mm,
                 sample_count=sample_count,
             )
         except ValueError:
@@ -901,11 +942,20 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
             ],
         )
     )
+    spacing_status_color = "#0f766e" if check.spacing_status == "OK" else "#b91c1c"
+    max_spacing_text = (
+        f"{check.max_spacing_advisory_mm:.0f} mm"
+        if math.isfinite(check.max_spacing_advisory_mm)
+        else "not set"
+    )
     label = (
         f"Top/bottom faces: {check.bars_x_face} {rebar_label(check.bar_dia_mm)} each<br>"
         f"Left/right faces: {check.bars_y_face} {rebar_label(check.bar_dia_mm)} each<br>"
         f"Total: {check.bar_count} bars, fy = {check.fy_mpa:.0f} MPa, rho = {check.rho_percent:.3f}%<br>"
-        f"Clear spacing: x-face {check.clear_spacing_x_mm:.0f} mm, y-face {check.clear_spacing_y_mm:.0f} mm"
+        f"Clear spacing: x-face {check.clear_spacing_x_mm:.0f} mm, y-face {check.clear_spacing_y_mm:.0f} mm<br>"
+        f"c/c spacing: x-face {check.center_spacing_x_mm:.0f} mm, y-face {check.center_spacing_y_mm:.0f} mm<br>"
+        f"Max spacing advisory: {max_spacing_text} "
+        f"<span style='color:{spacing_status_color}'>{check.spacing_status}</span>"
     )
     fig.add_annotation(
         x=-x,
@@ -1211,7 +1261,7 @@ def metric_row(resultant, check):
         cols[2].metric("phi Mny at Pu", f"{check.phi_mny_at_pu_knm:,.0f} kN-m")
         cols[3].metric("As provided", f"{check.as_total_mm2:,.0f} mm2")
         cols[4].metric("rho", f"{check.rho_percent:.3f} %")
-        cols[5].metric("min clear spacing", f"{check.min_clear_spacing_mm:,.0f} mm")
+        cols[5].metric("max c/c spacing", f"{check.max_center_spacing_mm:,.0f} mm")
 
 
 st.title("RC Bridge Abutment ULS Designer")
@@ -1284,6 +1334,16 @@ with st.sidebar:
     st.header("Reinforcement")
     cover_mm = st.number_input("Clear cover to tie / outer bar (mm)", min_value=25.0, value=75.0, step=5.0)
     min_clear_spacing_mm = st.number_input("minimum clear bar spacing (mm)", min_value=25.0, value=100.0, step=25.0)
+    default_max_spacing_mm = min(3.0 * depth_y_mm, 450.0)
+    max_spacing_advisory_mm = st.number_input(
+        "max bar spacing advisory, c/c (mm)",
+        min_value=100.0,
+        max_value=2000.0,
+        value=float(default_max_spacing_mm),
+        step=25.0,
+        help="Advisory default for wall/abutment-style distributed reinforcement: min(3t, 450 mm). Verify with the governing code edition and project specification.",
+    )
+    enforce_max_spacing = st.checkbox("enforce max spacing in auto design", value=True)
     mode = st.radio("Reinforcement mode", ["Auto design", "Manual check"], horizontal=True)
     rho_min_percent = st.number_input("minimum rho for auto (%)", min_value=0.0, max_value=5.0, value=0.25, step=0.05)
     rho_max_percent = st.number_input("maximum rho for auto (%)", min_value=0.1, max_value=10.0, value=4.00, step=0.10)
@@ -1399,6 +1459,8 @@ try:
                     biaxial_method=biaxial_method,
                     load_contour_alpha=load_contour_alpha,
                     min_clear_spacing_mm=min_clear_spacing_mm,
+                    max_spacing_advisory_mm=max_spacing_advisory_mm,
+                    enforce_max_spacing=enforce_max_spacing,
                 )
             if check is None:
                 design_error = "No reinforcement layout passed within the selected auto limits."
@@ -1419,6 +1481,7 @@ try:
             params=params,
             biaxial_method=biaxial_method,
             load_contour_alpha=load_contour_alpha,
+            max_spacing_advisory_mm=max_spacing_advisory_mm,
         )
 except Exception as exc:  # noqa: BLE001
     design_error = str(exc)
@@ -1461,6 +1524,11 @@ with tabs[0]:
             st.warning(
                 f"Clear spacing is {check.min_clear_spacing_mm:.0f} mm, less than the selected minimum "
                 f"{min_clear_spacing_mm:.0f} mm. Adjust bar count, bar size, cover, or section dimensions."
+            )
+        if check.spacing_status != "OK":
+            st.warning(
+                f"Maximum center-to-center spacing is {check.max_center_spacing_mm:.0f} mm, greater than the "
+                f"advisory limit {check.max_spacing_advisory_mm:.0f} mm."
             )
 
     st.plotly_chart(load_vector_plot(resultant.mux_knm, resultant.muy_knm), width="stretch")
@@ -1548,6 +1616,9 @@ with tabs[3]:
         `P-My` varies strain across the x direction and is mainly resisted by bars on the left/right faces.
         Auto design searches by total steel area, rejects layouts below the selected clear spacing, then prefers layouts whose
         bar spacing is balanced around the section perimeter before checking strength.
+        The max spacing advisory shown on the section is a detailing aid. Its default value is `min(3t, 450 mm)`,
+        where `t` is the abutment thickness along y, but it must be verified against the governing ACI/AASHTO edition,
+        member classification, seismic requirements, and project specifications.
         Biaxial bending can be checked with the conservative linear interaction:
 
         `|Mux| / phi Mnx(Pu) + |Muy| / phi Mny(Pu) <= 1.0`
