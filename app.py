@@ -77,6 +77,9 @@ class SectionCheck:
     fy_mpa: float
     bars_x_face: int
     bars_y_face: int
+    clear_spacing_x_mm: float
+    clear_spacing_y_mm: float
+    min_clear_spacing_mm: float
     phi_pmax_kn: float
     phi_mnx_at_pu_knm: float
     phi_mny_at_pu_knm: float
@@ -121,6 +124,40 @@ def beta1_aci(fc_mpa: float) -> float:
 
 def bar_area_mm2(diameter_mm: float) -> float:
     return math.pi * diameter_mm**2 / 4.0
+
+
+def clear_spacing_by_face_mm(
+    width_x_mm: float,
+    depth_y_mm: float,
+    cover_mm: float,
+    bar_dia_mm: float,
+    bars_x_face: int,
+    bars_y_face: int,
+) -> tuple[float, float, float]:
+    edge_x = width_x_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    edge_y = depth_y_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    if bars_x_face <= 1 or bars_y_face <= 1 or edge_x <= 0 or edge_y <= 0:
+        return -math.inf, -math.inf, -math.inf
+    clear_x = 2.0 * edge_x / (bars_x_face - 1) - bar_dia_mm
+    clear_y = 2.0 * edge_y / (bars_y_face - 1) - bar_dia_mm
+    return clear_x, clear_y, min(clear_x, clear_y)
+
+
+def layout_balance_penalty(
+    width_x_mm: float,
+    depth_y_mm: float,
+    cover_mm: float,
+    bar_dia_mm: float,
+    bars_x_face: int,
+    bars_y_face: int,
+) -> float:
+    edge_x = width_x_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    edge_y = depth_y_mm / 2.0 - cover_mm - bar_dia_mm / 2.0
+    if bars_x_face <= 1 or bars_y_face <= 1 or edge_x <= 0 or edge_y <= 0:
+        return math.inf
+    spacing_x = 2.0 * edge_x / (bars_x_face - 1)
+    spacing_y = 2.0 * edge_y / (bars_y_face - 1)
+    return abs(math.log(max(spacing_x, 1.0) / max(spacing_y, 1.0)))
 
 
 def combine_bearing_loads(records: Iterable[dict]) -> BearingResultant:
@@ -445,6 +482,14 @@ def analyze_section(
     as_total = sum(bar.area_mm2 for bar in bars)
     ag = width_x_mm * depth_y_mm
     rho = as_total / ag * 100.0
+    clear_x, clear_y, min_clear = clear_spacing_by_face_mm(
+        width_x_mm,
+        depth_y_mm,
+        cover_mm,
+        bar_dia_mm,
+        bars_x_face,
+        bars_y_face,
+    )
     pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
     curve_x = interaction_curve(
         width_x_mm=width_x_mm,
@@ -489,6 +534,9 @@ def analyze_section(
         fy_mpa=fy_mpa,
         bars_x_face=bars_x_face,
         bars_y_face=bars_y_face,
+        clear_spacing_x_mm=clear_x,
+        clear_spacing_y_mm=clear_y,
+        min_clear_spacing_mm=min_clear,
         phi_pmax_kn=pmax,
         phi_mnx_at_pu_knm=cap_x,
         phi_mny_at_pu_knm=cap_y,
@@ -524,11 +572,12 @@ def find_reinforcement(
     rho_max_percent: float,
     biaxial_method: str = "Load contour",
     load_contour_alpha: float = 1.50,
+    min_clear_spacing_mm: float = 75.0,
     max_bars_x_face: int = 28,
     max_bars_y_face: int = 18,
     sample_count: int = 120,
 ) -> SectionCheck | None:
-    candidates: list[tuple[float, float, int, int]] = []
+    candidates: list[tuple[float, float, float, int, int]] = []
     ag = width_x_mm * depth_y_mm
     for dia in bar_dia_options_mm:
         area = bar_area_mm2(dia)
@@ -537,10 +586,13 @@ def find_reinforcement(
                 bar_count = 2 * nx + 2 * max(0, ny - 2)
                 as_total = bar_count * area
                 rho = as_total / ag * 100.0
+                _, _, min_clear = clear_spacing_by_face_mm(width_x_mm, depth_y_mm, cover_mm, dia, nx, ny)
                 if rho_min_percent <= rho <= rho_max_percent:
-                    candidates.append((as_total, dia, nx, ny))
+                    if min_clear >= min_clear_spacing_mm:
+                        balance = layout_balance_penalty(width_x_mm, depth_y_mm, cover_mm, dia, nx, ny)
+                        candidates.append((as_total, balance, dia, nx, ny))
 
-    for _, dia, nx, ny in sorted(candidates, key=lambda item: item[0]):
+    for _, _, dia, nx, ny in sorted(candidates, key=lambda item: (item[0], item[1], item[2])):
         try:
             check = analyze_section(
                 width_x_mm=width_x_mm,
@@ -785,7 +837,7 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
     x = check.width_x_mm / 2.0
     y = check.depth_y_mm / 2.0
     _add_rect(fig, x0=-x, x1=x, y0=-y, y1=y, fillcolor="#f8fafc", linecolor=COLORS["concrete_line"])
-    marker_size = max(12, min(24, check.bar_dia_mm * 0.72))
+    marker_size = max(5, min(10, check.bar_dia_mm * 0.28))
     fig.add_trace(
         go.Scatter(
             x=[bar.x_mm for bar in check.bars],
@@ -794,7 +846,7 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
             marker={
                 "size": marker_size,
                 "color": "#f97316",
-                "line": {"color": "#7c2d12", "width": 2.5},
+                "line": {"color": "#7c2d12", "width": 1.4},
                 "opacity": 1.0,
             },
             hovertemplate="DB%{customdata[0]:.0f}<br>x=%{x:.0f} mm<br>y=%{y:.0f} mm<extra></extra>",
@@ -804,7 +856,8 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
     label = (
         f"Top/bottom faces: {check.bars_x_face} {rebar_label(check.bar_dia_mm)} each<br>"
         f"Left/right faces: {check.bars_y_face} {rebar_label(check.bar_dia_mm)} each<br>"
-        f"Total: {check.bar_count} bars, fy = {check.fy_mpa:.0f} MPa"
+        f"Total: {check.bar_count} bars, fy = {check.fy_mpa:.0f} MPa<br>"
+        f"Clear spacing: x-face {check.clear_spacing_x_mm:.0f} mm, y-face {check.clear_spacing_y_mm:.0f} mm"
     )
     fig.add_annotation(
         x=-x,
@@ -820,13 +873,20 @@ def reinforcement_plan(check: SectionCheck) -> go.Figure:
         borderpad=6,
         font={"color": "#172033", "size": 13},
     )
-    arrow = max(check.width_x_mm, check.depth_y_mm) * 0.18
-    _add_axis_arrow(fig, x=-x * 0.78, y=-y * 0.78, dx=arrow, dy=0, label="+x", color=COLORS["axis_x"])
-    _add_axis_arrow(fig, x=-x * 0.78, y=-y * 0.78, dx=0, dy=arrow, label="+y", color=COLORS["axis_y"])
+    axis_gap = max(360.0, check.depth_y_mm * 0.38)
+    axis_origin_x = -x
+    axis_origin_y = -y - axis_gap
+    arrow_x = min(max(check.width_x_mm * 0.14, 500.0), 1300.0)
+    arrow_y = min(max(check.depth_y_mm * 0.25, 250.0), axis_gap * 0.72)
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
+    _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow_y, label="+y", color=COLORS["axis_y"])
     pad = max(check.width_x_mm, check.depth_y_mm) * 0.12
     fig.update_xaxes(range=[-x - pad, x + pad])
-    fig.update_yaxes(range=[-y - pad, y + pad * 1.65])
-    return _finish_view(fig, "Base section reinforcement", "x (mm)", "y (mm)")
+    fig.update_yaxes(range=[-y - axis_gap - 220.0, y + pad * 1.65])
+    fig = _finish_view(fig, "Base section reinforcement", "x (mm)", "y (mm)")
+    fig.update_xaxes(zeroline=False)
+    fig.update_yaxes(zeroline=False)
+    return fig
 
 
 def interaction_plot(check: SectionCheck, pu_kn: float, mux_knm: float, muy_knm: float) -> go.Figure:
@@ -1061,6 +1121,25 @@ def clean_bearings(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+def sync_bearing_editor(editor_key: str) -> None:
+    editor_state = st.session_state.get(editor_key)
+    if not isinstance(editor_state, dict):
+        return
+    base_table = st.session_state.get("bearing_table")
+    if base_table is None:
+        return
+
+    updated = clean_bearings(pd.DataFrame(base_table))
+    for row_index, changes in editor_state.get("edited_rows", {}).items():
+        index = int(row_index)
+        if index >= len(updated):
+            continue
+        for column, value in changes.items():
+            if column in updated.columns:
+                updated.at[index, column] = value
+    st.session_state.bearing_table = clean_bearings(updated)
+
+
 def status_html(status: str, ratio: float) -> str:
     klass = "status-ok" if status == "OK" else "status-ng"
     label = "PASS" if status == "OK" else "FAIL"
@@ -1077,12 +1156,13 @@ def metric_row(resultant, check):
     cols[5].metric("Tz resultant", f"{resultant.torsion_z_knm:,.0f} kN-m")
 
     if check is not None:
-        cols = st.columns(5)
+        cols = st.columns(6)
         cols[0].metric("phi Pmax", f"{check.phi_pmax_kn:,.0f} kN")
         cols[1].metric("phi Mnx at Pu", f"{check.phi_mnx_at_pu_knm:,.0f} kN-m")
         cols[2].metric("phi Mny at Pu", f"{check.phi_mny_at_pu_knm:,.0f} kN-m")
         cols[3].metric("As provided", f"{check.as_total_mm2:,.0f} mm2")
         cols[4].metric("rho", f"{check.rho_percent:.3f} %")
+        cols[5].metric("min clear spacing", f"{check.min_clear_spacing_mm:,.0f} mm")
 
 
 st.title("RC Bridge Abutment ULS Designer")
@@ -1154,6 +1234,7 @@ with st.sidebar:
 
     st.header("Reinforcement")
     cover_mm = st.number_input("Clear cover to tie / outer bar (mm)", min_value=25.0, value=75.0, step=5.0)
+    min_clear_spacing_mm = st.number_input("minimum clear bar spacing (mm)", min_value=25.0, value=100.0, step=25.0)
     mode = st.radio("Reinforcement mode", ["Auto design", "Manual check"], horizontal=True)
     rho_min_percent = st.number_input("minimum rho for auto (%)", min_value=0.0, max_value=5.0, value=0.25, step=0.05)
     rho_max_percent = st.number_input("maximum rho for auto (%)", min_value=0.1, max_value=10.0, value=4.00, step=0.10)
@@ -1166,8 +1247,8 @@ with st.sidebar:
             format_func=lambda dia: f"{rebar_label(dia)}  fy={rebar_fy_mpa(dia):.0f} MPa",
         )
         selected_fy_mpa = rebar_fy_mpa(float(bar_dia_mm))
-        bars_x_face = st.number_input("bars on each x-face", min_value=2, max_value=40, value=12, step=1)
-        bars_y_face = st.number_input("bars on each y-face", min_value=2, max_value=24, value=3, step=1)
+        bars_x_face = st.number_input("bars along x on top/bottom faces", min_value=2, max_value=40, value=12, step=1)
+        bars_y_face = st.number_input("bars along y on left/right faces", min_value=2, max_value=24, value=3, step=1)
     else:
         dia_options = st.multiselect(
             "auto bar diameters",
@@ -1205,7 +1286,7 @@ if "bearing_table" not in st.session_state or reset_table:
         height_z_mm,
         row_spacing_y_mm,
     )
-    st.session_state.bearing_editor_version = st.session_state.get("bearing_editor_version", 0) + 1
+    st.session_state.pop("bearing_load_editor", None)
 elif len(st.session_state.bearing_table) != expected_bearing_count:
     st.session_state.bearing_table = default_bearings(
         int(bearings_per_row),
@@ -1214,13 +1295,15 @@ elif len(st.session_state.bearing_table) != expected_bearing_count:
         height_z_mm,
         row_spacing_y_mm,
     )
-    st.session_state.bearing_editor_version = st.session_state.get("bearing_editor_version", 0) + 1
+    st.session_state.pop("bearing_load_editor", None)
 
-editor_key = f"bearing_load_editor_{st.session_state.get('bearing_editor_version', 0)}"
+editor_key = "bearing_load_editor"
 
 edited = st.data_editor(
     st.session_state.bearing_table,
     key=editor_key,
+    on_change=sync_bearing_editor,
+    args=(editor_key,),
     num_rows="fixed",
     width="stretch",
     hide_index=True,
@@ -1236,9 +1319,7 @@ edited = st.data_editor(
         "Mu_y_kNm": st.column_config.NumberColumn("Mu_y (kN-m)", step=10.0, format="%.1f"),
     },
 )
-bearings_df = clean_bearings(edited)
-if not bearings_df.equals(st.session_state.bearing_table):
-    st.session_state.bearing_table = bearings_df
+bearings_df = clean_bearings(st.session_state.bearing_table)
 records = bearings_df.to_dict("records")
 resultant = combine_bearing_loads(records)
 
@@ -1268,6 +1349,7 @@ try:
                     rho_max_percent=rho_max_percent,
                     biaxial_method=biaxial_method,
                     load_contour_alpha=load_contour_alpha,
+                    min_clear_spacing_mm=min_clear_spacing_mm,
                 )
             if check is None:
                 design_error = "No reinforcement layout passed within the selected auto limits."
@@ -1322,10 +1404,15 @@ with tabs[0]:
 
         rebar_text = (
             f"{check.bar_count} bars {rebar_label(check.bar_dia_mm)} fy={check.fy_mpa:.0f} MPa: "
-            f"{check.bars_x_face} bars on each x-face, "
-            f"{check.bars_y_face} bars on each y-face"
+            f"{check.bars_x_face} bars along x on each top/bottom face, "
+            f"{check.bars_y_face} bars along y on each left/right face"
         )
         st.info(rebar_text)
+        if check.min_clear_spacing_mm < min_clear_spacing_mm:
+            st.warning(
+                f"Clear spacing is {check.min_clear_spacing_mm:.0f} mm, less than the selected minimum "
+                f"{min_clear_spacing_mm:.0f} mm. Adjust bar count, bar size, cover, or section dimensions."
+            )
 
     st.plotly_chart(load_vector_plot(resultant.mux_knm, resultant.muy_knm), width="stretch")
 
@@ -1408,6 +1495,10 @@ with tabs[3]:
         **RC section check**
 
         The app uses Whitney stress block strain compatibility for uniaxial `P-Mx` and `P-My` curves.
+        `P-Mx` varies strain across the y direction and is mainly resisted by bars on the top/bottom faces.
+        `P-My` varies strain across the x direction and is mainly resisted by bars on the left/right faces.
+        Auto design searches by total steel area, rejects layouts below the selected clear spacing, then prefers layouts whose
+        bar spacing is balanced around the section perimeter before checking strength.
         Biaxial bending can be checked with the conservative linear interaction:
 
         `|Mux| / phi Mnx(Pu) + |Muy| / phi Mny(Pu) <= 1.0`
