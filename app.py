@@ -20,6 +20,8 @@ REBAR_FY_BY_DIA_MPA = {
     28.0: 390.0,
     32.0: 490.0,
 }
+PMM_METHOD = "PMM surface"
+BIAXIAL_METHODS = ["Load contour", "Linear", PMM_METHOD]
 
 ALPHA_GUIDANCE_MD = """
 **Load contour alpha guide**
@@ -115,11 +117,15 @@ class SectionCheck:
     biaxial_linear_ratio: float
     load_contour_ratio: float
     load_contour_alpha: float
+    pmm_ratio: float
+    pmm_capacity_radius_knm: float
     biaxial_method: str
     governing_ratio: float
     status: str
     curve_x: list[dict[str, float]]
     curve_y: list[dict[str, float]]
+    pmm_surface: dict[str, list[list[float]]]
+    pmm_slice: list[dict[str, float]]
     bars: list[Bar]
 
 
@@ -494,6 +500,135 @@ def _capacity_at_pu(curve: list[dict[str, float]], pu_kn: float) -> float:
     return float(np.interp(pu_kn, p_values, m_values))
 
 
+def _cross_2d(ax: float, ay: float, bx: float, by: float) -> float:
+    return ax * by - ay * bx
+
+
+def _ray_polygon_capacity_radius(points: list[tuple[float, float]], mux_knm: float, muy_knm: float) -> float:
+    demand_radius = math.hypot(mux_knm, muy_knm)
+    if demand_radius <= 1e-9:
+        return math.inf
+    if len(points) < 3:
+        return 0.0
+
+    ux = mux_knm / demand_radius
+    uy = muy_knm / demand_radius
+    intersections: list[float] = []
+    closed = points + [points[0]]
+    for p1, p2 in zip(closed[:-1], closed[1:]):
+        x1, y1 = p1
+        dx = p2[0] - x1
+        dy = p2[1] - y1
+        denom = _cross_2d(ux, uy, dx, dy)
+        if abs(denom) < 1e-9:
+            continue
+        t = _cross_2d(x1, y1, dx, dy) / denom
+        s = _cross_2d(x1, y1, ux, uy) / denom
+        if t >= -1e-7 and -1e-7 <= s <= 1.0 + 1e-7:
+            intersections.append(max(0.0, t))
+
+    positive = [value for value in intersections if value > 1e-6]
+    return min(positive) if positive else 0.0
+
+
+def pmm_surface_check(
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    bars: list[Bar],
+    fc_mpa: float,
+    fy_mpa: float,
+    es_mpa: float,
+    pu_kn: float,
+    mux_knm: float,
+    muy_knm: float,
+    params: CodeParameters,
+    angle_count: int = 72,
+    sample_count: int = 84,
+) -> dict:
+    pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
+    max_dim = max(width_x_mm, depth_y_mm)
+    c_values = np.geomspace(max(1.0, max_dim / 1000.0), max_dim * 80.0, sample_count)
+    theta_values = np.linspace(0.0, 2.0 * math.pi, angle_count, endpoint=False)
+
+    mx_grid: list[list[float]] = []
+    my_grid: list[list[float]] = []
+    p_grid: list[list[float]] = []
+    slice_points: list[dict[str, float]] = []
+
+    for theta in theta_values:
+        curve: list[dict[str, float]] = []
+        row_mx: list[float] = []
+        row_my: list[float] = []
+        row_p: list[float] = []
+        for c_mm in c_values:
+            response = _section_response(
+                width_x_mm=width_x_mm,
+                depth_y_mm=depth_y_mm,
+                bars=bars,
+                fc_mpa=fc_mpa,
+                fy_mpa=fy_mpa,
+                es_mpa=es_mpa,
+                c_mm=float(c_mm),
+                theta_rad=float(theta),
+                params=params,
+            )
+            phi_pn = min(response["phi_pn_kn"], pmax)
+            mx = response["phi_mx_knm"]
+            my = response["phi_my_knm"]
+            point = {"theta": float(theta), "phi_pn_kn": phi_pn, "phi_mx_knm": mx, "phi_my_knm": my}
+            curve.append(point)
+            row_mx.append(mx)
+            row_my.append(my)
+            row_p.append(phi_pn)
+
+        mx_grid.append(row_mx)
+        my_grid.append(row_my)
+        p_grid.append(row_p)
+
+        candidates: list[dict[str, float]] = []
+        for p1, p2 in zip(curve[:-1], curve[1:]):
+            p1_value = p1["phi_pn_kn"]
+            p2_value = p2["phi_pn_kn"]
+            if abs(p2_value - p1_value) < 1e-9:
+                continue
+            if (p1_value - pu_kn) * (p2_value - pu_kn) <= 0.0:
+                ratio = (pu_kn - p1_value) / (p2_value - p1_value)
+                ratio = min(1.0, max(0.0, ratio))
+                mx = p1["phi_mx_knm"] + ratio * (p2["phi_mx_knm"] - p1["phi_mx_knm"])
+                my = p1["phi_my_knm"] + ratio * (p2["phi_my_knm"] - p1["phi_my_knm"])
+                candidates.append({"mx_knm": mx, "my_knm": my, "theta": float(theta), "angle": math.atan2(my, mx)})
+
+        if candidates:
+            slice_points.append(max(candidates, key=lambda point: math.hypot(point["mx_knm"], point["my_knm"])))
+
+    if mx_grid:
+        mx_grid.append(list(mx_grid[0]))
+        my_grid.append(list(my_grid[0]))
+        p_grid.append(list(p_grid[0]))
+
+    if not slice_points and abs(pu_kn - pmax) <= max(1.0, 0.001 * max(pmax, 1.0)):
+        slice_points = [{"mx_knm": 0.0, "my_knm": 0.0, "theta": 0.0, "angle": 0.0}]
+
+    slice_points = sorted(slice_points, key=lambda point: point["angle"])
+    polygon = [(point["mx_knm"], point["my_knm"]) for point in slice_points]
+    capacity_radius = _ray_polygon_capacity_radius(polygon, mux_knm, muy_knm)
+    demand_radius = math.hypot(mux_knm, muy_knm)
+    if demand_radius <= 1e-9:
+        pmm_ratio = 0.0
+    elif capacity_radius > 0.0 and math.isfinite(capacity_radius):
+        pmm_ratio = demand_radius / capacity_radius
+    else:
+        pmm_ratio = math.inf
+
+    return {
+        "ratio": pmm_ratio,
+        "capacity_radius_knm": capacity_radius,
+        "slice": slice_points,
+        "surface": {"mx": mx_grid, "my": my_grid, "p": p_grid},
+    }
+
+
 def analyze_section(
     *,
     width_x_mm: float,
@@ -572,7 +707,32 @@ def analyze_section(
     muy_ratio = abs(muy_knm) / cap_y if cap_y > 0 else math.inf
     biaxial_linear_ratio = mux_ratio + muy_ratio
     load_contour_ratio = mux_ratio**load_contour_alpha + muy_ratio**load_contour_alpha
-    biaxial_ratio = load_contour_ratio if biaxial_method == "Load contour" else biaxial_linear_ratio
+    pmm_ratio = math.nan
+    pmm_capacity_radius = math.nan
+    pmm_surface: dict[str, list[list[float]]] = {"mx": [], "my": [], "p": []}
+    pmm_slice: list[dict[str, float]] = []
+    if biaxial_method == PMM_METHOD:
+        pmm = pmm_surface_check(
+            width_x_mm=width_x_mm,
+            depth_y_mm=depth_y_mm,
+            bars=bars,
+            fc_mpa=fc_mpa,
+            fy_mpa=fy_mpa,
+            es_mpa=es_mpa,
+            pu_kn=pu_kn,
+            mux_knm=mux_knm,
+            muy_knm=muy_knm,
+            params=params,
+        )
+        pmm_ratio = pmm["ratio"]
+        pmm_capacity_radius = pmm["capacity_radius_knm"]
+        pmm_surface = pmm["surface"]
+        pmm_slice = pmm["slice"]
+        biaxial_ratio = pmm_ratio
+    elif biaxial_method == "Load contour":
+        biaxial_ratio = load_contour_ratio
+    else:
+        biaxial_ratio = biaxial_linear_ratio
     governing_ratio = max(axial_ratio, biaxial_ratio)
     status = "OK" if governing_ratio <= 1.0 else "NG"
 
@@ -604,11 +764,15 @@ def analyze_section(
         biaxial_linear_ratio=biaxial_linear_ratio,
         load_contour_ratio=load_contour_ratio,
         load_contour_alpha=load_contour_alpha,
+        pmm_ratio=pmm_ratio,
+        pmm_capacity_radius_knm=pmm_capacity_radius,
         biaxial_method=biaxial_method,
         governing_ratio=governing_ratio,
         status=status,
         curve_x=curve_x,
         curve_y=curve_y,
+        pmm_surface=pmm_surface,
+        pmm_slice=pmm_slice,
         bars=bars,
     )
 
@@ -654,6 +818,7 @@ def find_reinforcement(
 
     for _, _, dia, nx, ny in sorted(candidates, key=lambda item: (item[0], item[1], item[2])):
         try:
+            fast_method = "Load contour" if biaxial_method == PMM_METHOD else biaxial_method
             check = analyze_section(
                 width_x_mm=width_x_mm,
                 depth_y_mm=depth_y_mm,
@@ -668,11 +833,33 @@ def find_reinforcement(
                 mux_knm=mux_knm,
                 muy_knm=muy_knm,
                 params=params,
-                biaxial_method=biaxial_method,
+                biaxial_method=fast_method,
                 load_contour_alpha=load_contour_alpha,
                 max_spacing_advisory_mm=max_spacing_advisory_mm,
                 sample_count=sample_count,
             )
+            if biaxial_method == PMM_METHOD:
+                if check.axial_ratio > 1.0 or check.mux_ratio > 1.0 or check.muy_ratio > 1.0:
+                    continue
+                check = analyze_section(
+                    width_x_mm=width_x_mm,
+                    depth_y_mm=depth_y_mm,
+                    cover_mm=cover_mm,
+                    bar_dia_mm=dia,
+                    bars_x_face=nx,
+                    bars_y_face=ny,
+                    fc_mpa=fc_mpa,
+                    fy_mpa=rebar_fy_mpa(dia),
+                    es_mpa=es_mpa,
+                    pu_kn=pu_kn,
+                    mux_knm=mux_knm,
+                    muy_knm=muy_knm,
+                    params=params,
+                    biaxial_method=biaxial_method,
+                    load_contour_alpha=load_contour_alpha,
+                    max_spacing_advisory_mm=max_spacing_advisory_mm,
+                    sample_count=sample_count,
+                )
         except ValueError:
             continue
         if check.status == "OK":
@@ -1124,6 +1311,173 @@ def biaxial_load_contour_plot(check: SectionCheck, mux_knm: float, muy_knm: floa
     return fig
 
 
+def pmm_slice_plot(check: SectionCheck, mux_knm: float, muy_knm: float, pu_kn: float) -> go.Figure:
+    points = check.pmm_slice
+    fig = go.Figure()
+    if not points:
+        fig.add_annotation(
+            x=0.5,
+            y=0.5,
+            text="No PMM slice is available at this Pu level.",
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"color": "#64748b", "size": 14},
+        )
+        fig.update_layout(height=460, paper_bgcolor="white", plot_bgcolor="white")
+        return fig
+
+    contour_x = [point["mx_knm"] for point in points] + [points[0]["mx_knm"]]
+    contour_y = [point["my_knm"] for point in points] + [points[0]["my_knm"]]
+    fig.add_trace(
+        go.Scatter(
+            x=contour_x,
+            y=contour_y,
+            mode="lines",
+            fill="toself",
+            fillcolor="rgba(14, 165, 233, 0.10)",
+            name="PMM slice",
+            line={"color": "#0284c7", "width": 3},
+            hovertemplate="Mux=%{x:.1f} kN-m<br>Muy=%{y:.1f} kN-m<extra></extra>",
+        )
+    )
+    demand_color = "#0f766e" if check.pmm_ratio <= 1.0 else "#dc2626"
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0, mux_knm],
+            y=[0.0, muy_knm],
+            mode="lines+markers",
+            name="demand",
+            line={"color": demand_color, "width": 3},
+            marker={"size": [7, 13], "color": ["#334155", demand_color], "symbol": ["circle", "x"]},
+            hovertemplate="Mux=%{x:.1f} kN-m<br>Muy=%{y:.1f} kN-m<extra></extra>",
+        )
+    )
+    fig.add_annotation(
+        x=mux_knm,
+        y=muy_knm,
+        text=f"PMM U = {check.pmm_ratio:.3f}",
+        showarrow=True,
+        arrowhead=2,
+        ax=28 if mux_knm <= 0 else -28,
+        ay=28 if muy_knm <= 0 else -28,
+        bgcolor="rgba(255,255,255,0.82)",
+    )
+    pad = 1.16 * max(
+        max(abs(value) for value in contour_x),
+        max(abs(value) for value in contour_y),
+        abs(mux_knm),
+        abs(muy_knm),
+        1.0,
+    )
+    fig.update_layout(
+        title={"text": f"PMM Mux-Muy slice at Pu = {pu_kn:,.0f} kN", "x": 0.02, "xanchor": "left"},
+        height=500,
+        margin={"l": 24, "r": 24, "t": 54, "b": 24},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        legend={"orientation": "h", "y": 1.02, "x": 0.52, "xanchor": "center"},
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+    )
+    fig.update_xaxes(title="Mux (kN-m)", range=[-pad, pad], gridcolor=COLORS["grid"], zeroline=True, zerolinecolor="#111827")
+    fig.update_yaxes(
+        title="Muy (kN-m)",
+        range=[-pad, pad],
+        gridcolor=COLORS["grid"],
+        zeroline=True,
+        zerolinecolor="#111827",
+        scaleanchor="x",
+        scaleratio=1,
+    )
+    return fig
+
+
+def pmm_surface_plot(check: SectionCheck, mux_knm: float, muy_knm: float, pu_kn: float) -> go.Figure:
+    surface = check.pmm_surface
+    fig = go.Figure()
+    if not surface.get("mx") or not check.pmm_slice:
+        fig.add_annotation(
+            x=0.5,
+            y=0.5,
+            text="Select PMM surface method to generate the 3D interaction surface.",
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"color": "#64748b", "size": 14},
+        )
+        fig.update_layout(height=560, paper_bgcolor="white", plot_bgcolor="white")
+        return fig
+
+    fig.add_trace(
+        go.Surface(
+            x=surface["mx"],
+            y=surface["my"],
+            z=surface["p"],
+            name="PMM surface",
+            colorscale="Blues",
+            opacity=0.42,
+            showscale=False,
+            hovertemplate="Mux=%{x:.0f} kN-m<br>Muy=%{y:.0f} kN-m<br>Pu=%{z:.0f} kN<extra></extra>",
+        )
+    )
+    slice_x = [point["mx_knm"] for point in check.pmm_slice] + [check.pmm_slice[0]["mx_knm"]]
+    slice_y = [point["my_knm"] for point in check.pmm_slice] + [check.pmm_slice[0]["my_knm"]]
+    slice_z = [pu_kn for _ in slice_x]
+    fig.add_trace(
+        go.Scatter3d(
+            x=slice_x,
+            y=slice_y,
+            z=slice_z,
+            mode="lines",
+            name="current Pu slice",
+            line={"color": "#0284c7", "width": 6},
+            hovertemplate="Mux=%{x:.0f} kN-m<br>Muy=%{y:.0f} kN-m<br>Pu=%{z:.0f} kN<extra></extra>",
+        )
+    )
+    demand_color = "#0f766e" if check.pmm_ratio <= 1.0 else "#dc2626"
+    fig.add_trace(
+        go.Scatter3d(
+            x=[0.0, mux_knm],
+            y=[0.0, muy_knm],
+            z=[pu_kn, pu_kn],
+            mode="lines+markers",
+            name="demand vector",
+            line={"color": demand_color, "width": 6},
+            marker={"size": [3, 7], "color": ["#334155", demand_color], "symbol": "circle"},
+            hovertemplate="Mux=%{x:.0f} kN-m<br>Muy=%{y:.0f} kN-m<br>Pu=%{z:.0f} kN<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter3d(
+            x=[mux_knm],
+            y=[muy_knm],
+            z=[pu_kn],
+            mode="markers+text",
+            name="load point",
+            marker={"size": 7, "color": demand_color},
+            text=[f"U={check.pmm_ratio:.3f}"],
+            textposition="top center",
+            hovertemplate="Mux=%{x:.0f} kN-m<br>Muy=%{y:.0f} kN-m<br>Pu=%{z:.0f} kN<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title={"text": "3D PMM interaction surface with load point", "x": 0.02, "xanchor": "left"},
+        height=620,
+        margin={"l": 0, "r": 0, "t": 54, "b": 0},
+        paper_bgcolor="white",
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+        legend={"orientation": "h", "y": 1.02, "x": 0.5, "xanchor": "center"},
+        scene={
+            "xaxis": {"title": "Mux (kN-m)", "gridcolor": COLORS["grid"]},
+            "yaxis": {"title": "Muy (kN-m)", "gridcolor": COLORS["grid"]},
+            "zaxis": {"title": "Pu (kN)", "gridcolor": COLORS["grid"]},
+            "aspectmode": "cube",
+            "camera": {"eye": {"x": 1.45, "y": -1.55, "z": 1.05}},
+        },
+    )
+    return fig
+
+
 def load_vector_plot(resultant_mx: float, resultant_my: float) -> go.Figure:
     magnitude = math.hypot(resultant_mx, resultant_my)
     fig = go.Figure()
@@ -1345,7 +1699,7 @@ with st.sidebar:
         eps_cu=eps_cu,
     )
 
-    biaxial_method = st.radio("Biaxial check method", ["Load contour", "Linear"], horizontal=True)
+    biaxial_method = st.radio("Biaxial check method", BIAXIAL_METHODS, horizontal=True)
     load_contour_alpha = st.number_input(
         "load contour alpha",
         min_value=1.00,
@@ -1357,6 +1711,11 @@ with st.sidebar:
     )
     with st.expander("Alpha guidance and code reference", expanded=False):
         st.markdown(ALPHA_GUIDANCE_MD)
+    if biaxial_method == PMM_METHOD:
+        st.caption(
+            "PMM surface uses rotated neutral-axis strain compatibility and plots the 3D Pu-Mux-Muy surface. "
+            "Auto design uses a fast preliminary screen, then checks promising layouts with PMM."
+        )
 
     st.header("Geometry")
     width_x_mm = st.number_input("Abutment width along x (mm)", min_value=800.0, value=9000.0, step=100.0)
@@ -1486,8 +1845,8 @@ try:
                     fc_mpa=fc_mpa,
                     es_mpa=es_mpa,
                     pu_kn=resultant.pu_kn,
-                    mux_knm=resultant.design_mux_knm,
-                    muy_knm=resultant.design_muy_knm,
+                    mux_knm=resultant.mux_knm,
+                    muy_knm=resultant.muy_knm,
                     params=params,
                     rho_min_percent=rho_min_percent,
                     rho_max_percent=rho_max_percent,
@@ -1511,8 +1870,8 @@ try:
             fy_mpa=selected_fy_mpa,
             es_mpa=es_mpa,
             pu_kn=resultant.pu_kn,
-            mux_knm=resultant.design_mux_knm,
-            muy_knm=resultant.design_muy_knm,
+            mux_knm=resultant.mux_knm,
+            muy_knm=resultant.muy_knm,
             params=params,
             biaxial_method=biaxial_method,
             load_contour_alpha=load_contour_alpha,
@@ -1536,15 +1895,16 @@ with tabs[0]:
         st.markdown(status_html(check.status, check.governing_ratio), unsafe_allow_html=True)
         st.progress(min(1.0, max(0.0, check.governing_ratio)))
         summary = pd.DataFrame(
-            [
+            [row for row in [
                 ["Axial Pu / phi Pmax", check.axial_ratio],
                 ["Mux / phi Mnx(Pu)", check.mux_ratio],
                 ["Muy / phi Mny(Pu)", check.muy_ratio],
                 ["Linear biaxial interaction", check.biaxial_linear_ratio],
                 [f"Load contour interaction, alpha={check.load_contour_alpha:.2f}", check.load_contour_ratio],
+                ["PMM surface radial interaction", check.pmm_ratio],
                 [f"Selected biaxial method: {check.biaxial_method}", check.biaxial_ratio],
                 ["Governing utilization", check.governing_ratio],
-            ],
+            ] if not math.isnan(float(row[1]))],
             columns=["Check", "Ratio"],
         )
         st.dataframe(summary, width="stretch", hide_index=True)
@@ -1617,10 +1977,20 @@ with tabs[2]:
                 interaction_plot(check, resultant.pu_kn, resultant.design_mux_knm, resultant.design_muy_knm),
                 width="stretch",
             )
-        st.plotly_chart(
-            biaxial_load_contour_plot(check, resultant.mux_knm, resultant.muy_knm),
-            width="stretch",
-        )
+        if check.biaxial_method == PMM_METHOD:
+            st.plotly_chart(
+                pmm_slice_plot(check, resultant.mux_knm, resultant.muy_knm, resultant.pu_kn),
+                width="stretch",
+            )
+            st.plotly_chart(
+                pmm_surface_plot(check, resultant.mux_knm, resultant.muy_knm, resultant.pu_kn),
+                width="stretch",
+            )
+        else:
+            st.plotly_chart(
+                biaxial_load_contour_plot(check, resultant.mux_knm, resultant.muy_knm),
+                width="stretch",
+            )
         bar_table = pd.DataFrame(
             [{"bar": idx + 1, "x_mm": bar.x_mm, "y_mm": bar.y_mm, "area_mm2": bar.area_mm2} for idx, bar in enumerate(check.bars)]
         )
@@ -1668,6 +2038,10 @@ with tabs[3]:
         ACI 318-19 Chapter 21 and Chapter 22 govern strength reduction factors and sectional strength for axial load
         with flexure. AASHTO LRFD Article 5.6.4.5 covers biaxial flexure checks; it does not make `alpha = 1.50`
         a universal requirement.
+
+        The `PMM surface` method rotates the neutral axis through the section and calculates the design-strength
+        surface `(phi Pn, phi Mnx, phi Mny)` from strain compatibility. The app then slices that 3D surface at
+        the current `Pu` and checks the demand point by radial demand/capacity in the signed `Mux-Muy` plane.
 
         The biaxial contour graph is an `Mux-Muy` slice at the current `Pu`.
         The uniaxial P-M graph overlays two separate curves: `P-Mx` and `P-My`.
