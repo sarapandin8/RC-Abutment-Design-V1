@@ -1018,9 +1018,7 @@ def _add_axis_arrow(
         arrowsize=1.2,
         arrowwidth=2,
         arrowcolor=color,
-        font={"color": color, "size": 13},
-        bgcolor="rgba(255,255,255,0.75)",
-        borderpad=2,
+        font={"color": color, "size": 12},
     )
 
 
@@ -1070,11 +1068,7 @@ def _add_load_arrow(
         arrowsize=1.05,
         arrowwidth=2.2,
         arrowcolor=color,
-        font={"color": color, "size": 11},
-        bgcolor="rgba(255,255,255,0.82)",
-        bordercolor=color,
-        borderwidth=1,
-        borderpad=2,
+        font={"color": color, "size": 9},
     )
 
 
@@ -1094,11 +1088,7 @@ def _add_load_tag(
         text=text,
         showarrow=False,
         align="left",
-        bgcolor="rgba(255,255,255,0.84)",
-        bordercolor=color,
-        borderwidth=1,
-        borderpad=3,
-        font={"color": color, "size": 10},
+        font={"color": color, "size": 9},
     )
 
 
@@ -1146,11 +1136,7 @@ def _add_moment_arc(
         arrowsize=1.0,
         arrowwidth=2,
         arrowcolor=color,
-        font={"color": color, "size": 10},
-        bgcolor="rgba(255,255,255,0.84)",
-        bordercolor=color,
-        borderwidth=1,
-        borderpad=2,
+        font={"color": color, "size": 9},
     )
 
 
@@ -1165,11 +1151,7 @@ def _add_load_legend(fig: go.Figure, text: str) -> None:
         xanchor="left",
         yanchor="top",
         align="left",
-        bgcolor="rgba(255,255,255,0.86)",
-        bordercolor="#cbd5e1",
-        borderwidth=1,
-        borderpad=4,
-        font={"color": "#334155", "size": 11},
+        font={"color": "#334155", "size": 9},
     )
 
 
@@ -1296,7 +1278,7 @@ def plan_view(
         )
         tag_lines: list[str] = []
         if abs(pz) > 1e-9:
-            tag_lines.append(f"Pu_z {'down' if pz >= 0.0 else 'up'} {abs(pz):.0f} kN")
+            tag_lines.append(f"Pu_z {pz:+.0f} kN")
         if abs(mx) > 1e-9:
             tag_lines.append(f"Mu_x {mx:+.0f} kN-m")
         if abs(my) > 1e-9:
@@ -1310,11 +1292,11 @@ def plan_view(
         )
     _add_load_legend(fig, "Loads shown: Pu_x blue, Pu_y red, Pu_z / Mu tags purple")
 
-    axis_gap = max(650.0, max(width_x_mm, depth_y_mm) * 0.12)
+    axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
     axis_origin_x = -pile_x - axis_gap
     axis_origin_y = -pile_y - axis_gap
-    arrow_x = min(max(width_x_mm * 0.12, 450.0), axis_gap * 0.75)
-    arrow_y = min(max(depth_y_mm * 0.35, 250.0), axis_gap * 0.75)
+    arrow_x = min(max(width_x_mm * 0.18, 700.0), axis_gap * 0.95)
+    arrow_y = min(max(depth_y_mm * 0.55, 420.0), axis_gap * 0.95)
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow_y, label="+y", color=COLORS["axis_y"])
 
@@ -1389,11 +1371,11 @@ def front_view(
         )
     _add_load_legend(fig, "Front view loads: Pu_x blue, Pu_z green, Mu_y purple")
 
-    axis_gap = max(800.0, max(width_x_mm, height_z_mm) * 0.12)
+    axis_gap = max(950.0, max(width_x_mm, height_z_mm) * 0.15)
     axis_origin_x = -pile_x - axis_gap
     axis_origin_z = -pilecap_thickness_mm - axis_gap
-    arrow_x = min(max(width_x_mm * 0.12, 600.0), axis_gap * 0.75)
-    arrow_z = min(max(height_z_mm * 0.14, 450.0), axis_gap * 0.75)
+    arrow_x = min(max(width_x_mm * 0.18, 800.0), axis_gap * 0.95)
+    arrow_z = min(max(height_z_mm * 0.20, 700.0), axis_gap * 0.95)
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
@@ -1468,11 +1450,11 @@ def side_view(
         )
     _add_load_legend(fig, "Side view loads: Pu_y red, Pu_z green, Mu_x purple")
 
-    axis_gap = max(800.0, max(depth_y_mm, height_z_mm) * 0.12)
+    axis_gap = max(950.0, max(depth_y_mm, height_z_mm) * 0.15)
     axis_origin_y = -pile_y - axis_gap
     axis_origin_z = -pilecap_thickness_mm - axis_gap
-    arrow_y = min(max(depth_y_mm * 0.35, 350.0), axis_gap * 0.75)
-    arrow_z = min(max(height_z_mm * 0.14, 450.0), axis_gap * 0.75)
+    arrow_y = min(max(depth_y_mm * 0.55, 500.0), axis_gap * 0.95)
+    arrow_z = min(max(height_z_mm * 0.20, 700.0), axis_gap * 0.95)
     _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=arrow_y, dy=0, label="+y", color=COLORS["axis_y"])
     _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
