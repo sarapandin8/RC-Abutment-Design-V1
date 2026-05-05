@@ -967,7 +967,7 @@ COLORS = {
 }
 
 LOAD_TABLE_LINE_GAP_MM = 175.0
-SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 200.0
+SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 250.0
 
 
 def _add_rect(
@@ -1638,9 +1638,9 @@ def side_view(
 
     side_force_max = _max_abs_component(bearing_records, ("Pu_y_kN", "Pu_z_kN"))
     base_arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.060, 210.0), 460.0)
-    arrow_max = base_arrow_max * 2.0
-    arrow_min = min(105.0, base_arrow_max * 0.45) * 2.0
-    moment_radius = max(155.0, bearing_size_mm * 0.82)
+    arrow_max = base_arrow_max * 4.0
+    arrow_min = min(105.0, base_arrow_max * 0.45) * 4.0
+    moment_radius = max(310.0, bearing_size_mm * 1.64)
     load_clearance = max(46.0, half * 0.42)
     load_y_extents = [-pile_y, pile_y]
     load_z_extents = [-pilecap_thickness_mm, height_z_mm + bearing_h]
@@ -1730,7 +1730,7 @@ def side_view(
     load_line_gap = SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM
     row_block_height = load_line_gap * (len(active_components) + 1)
     group_gap = max(220.0, load_line_gap * 1.35)
-    table_clearance = max(380.0, load_line_gap * 1.35)
+    table_clearance = max(500.0, load_line_gap * 1.45)
     table_anchor_z = max(load_z_extents) + table_clearance
     load_text_axis_xs: list[float] = []
     load_text_zs: list[float] = []
