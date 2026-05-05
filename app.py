@@ -578,6 +578,29 @@ def minimum_reinforcement_check(check: SectionCheck, code_name: str) -> dict[str
     }
 
 
+def minimum_reinforcement_box_html(check: SectionCheck, code_name: str) -> str:
+    min_reinf = minimum_reinforcement_check(check, code_name)
+    status_ok = min_reinf["total_status"] == "OK" and min_reinf["face_status"] == "OK"
+    status_color = "#0f766e" if status_ok else "#b91c1c"
+    status_label = "OK" if status_ok else "NG"
+    return f"""
+    <div style="border:1px solid #cbd5e1; border-radius:8px; padding:12px 14px; background:#f8fafc; margin-top:8px;">
+      <div style="font-weight:700; color:#172033; margin-bottom:6px;">Minimum Reinforcement Check</div>
+      <div style="font-size:0.92rem; color:#334155; line-height:1.55;">
+        Shrinkage/temperature distributed reinforcement only. Column longitudinal minimum such as 1%Ag is not applied.<br>
+        Required rho = <b>{float(min_reinf['rho_req_percent']):.3f}%</b><br>
+        As,min total = <b>{float(min_reinf['as_min_total_mm2']):,.0f} mm2</b>,
+        As provided total = <b>{float(min_reinf['as_provided_total_mm2']):,.0f} mm2</b>
+        (<span style="color:{status_color}; font-weight:700;">{min_reinf['total_status']}</span>)<br>
+        As,min each main face = <b>{float(min_reinf['as_min_each_main_face_mm2']):,.0f} mm2</b>,
+        As provided each top/bottom face = <b>{float(min_reinf['as_provided_each_top_bottom_face_mm2']):,.0f} mm2</b>
+        (<span style="color:{status_color}; font-weight:700;">{min_reinf['face_status']}</span>)<br>
+        Overall status: <span style="color:{status_color}; font-weight:700;">{status_label}</span>
+      </div>
+    </div>
+    """
+
+
 def interaction_curve(
     *,
     width_x_mm: float,
@@ -2892,6 +2915,7 @@ with tabs[2]:
         sec_cols = st.columns(2)
         with sec_cols[0]:
             st.plotly_chart(reinforcement_plan(check), width="stretch")
+            st.markdown(minimum_reinforcement_box_html(check, code_choice), unsafe_allow_html=True)
         with sec_cols[1]:
             st.plotly_chart(
                 interaction_plot(check, resultant.pu_kn, resultant.design_mux_knm, resultant.design_muy_knm),
