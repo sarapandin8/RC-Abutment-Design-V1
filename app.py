@@ -1066,6 +1066,10 @@ def _load_label(name: str, value: float, unit: str) -> str:
     return f"{name} {value:+.0f} {unit}"
 
 
+def _compact_load_value(value: float) -> str:
+    return f"{value:+.0f}" if abs(value) > 1e-9 else "-"
+
+
 def _add_load_arrow(
     fig: go.Figure,
     *,
@@ -1288,47 +1292,99 @@ def plan_view(
         )
         fig.add_annotation(x=x, y=y, text=name, showarrow=False, font={"color": "white", "size": 11})
 
-    row_count = len({round(float(row.get("y_mm", 0.0)), 3) for row in bearing_records})
-    load_value_gap = max(half * 2.15, min(380.0, depth_y_mm * 0.28))
-    load_lane_gap = max(180.0, half * 1.35)
-    sorted_records = sorted(bearing_records, key=lambda item: (float(item.get("x_mm", 0.0)), float(item.get("y_mm", 0.0))))
+    row_groups: dict[float, list[dict]] = {}
+    for row in bearing_records:
+        row_key = round(float(row.get("y_mm", 0.0)), 3)
+        row_groups.setdefault(row_key, []).append(row)
+    grouped_rows = [
+        (row_y, sorted(rows, key=lambda item: float(item.get("x_mm", 0.0))))
+        for row_y, rows in sorted(row_groups.items(), key=lambda item: item[0], reverse=True)
+    ]
+    row_count = len(grouped_rows)
+    load_value_gap = max(half * 2.45, min(440.0, depth_y_mm * 0.34))
+    load_line_gap = max(105.0, half * 0.9)
+    load_components = [
+        ("Pu_x", "Pu_x_kN", "kN", COLORS["axis_x"]),
+        ("Pu_y", "Pu_y_kN", "kN", COLORS["axis_y"]),
+        ("Pu_z", "Pu_z_kN", "kN", COLORS["axis_z"]),
+        ("Mu_x", "Mu_x_kNm", "kN-m", "#7c3aed"),
+        ("Mu_y", "Mu_y_kNm", "kN-m", "#7c3aed"),
+    ]
     load_text_ys: list[float] = []
-    row_slot_counter: dict[float, int] = {}
-    for index, row in enumerate(sorted_records):
-        x = float(row.get("x_mm", 0.0))
-        y = float(row.get("y_mm", 0.0))
-        row_key = round(y, 3)
-        lane_index = row_slot_counter.get(row_key, 0)
-        row_slot_counter[row_key] = lane_index + 1
-        px = float(row.get("Pu_x_kN", 0.0))
-        py = float(row.get("Pu_y_kN", 0.0))
-        pz = float(row.get("Pu_z_kN", 0.0))
-        mx = float(row.get("Mu_x_kNm", 0.0))
-        my = float(row.get("Mu_y_kNm", 0.0))
-        tag_lines: list[str] = []
-        if abs(px) > 1e-9:
-            tag_lines.append(_load_label("Pu_x", px, "kN"))
-        if abs(py) > 1e-9:
-            tag_lines.append(_load_label("Pu_y", py, "kN"))
-        if abs(pz) > 1e-9:
-            tag_lines.append(f"Pu_z {pz:+.0f} kN")
-        if abs(mx) > 1e-9:
-            tag_lines.append(f"Mu_x {mx:+.0f} kN-m")
-        if abs(my) > 1e-9:
-            tag_lines.append(f"Mu_y {my:+.0f} kN-m")
-        stagger = (lane_index % 3) * load_lane_gap
-        value_y = y + load_value_gap + stagger if row_count > 1 else y - load_value_gap - stagger
-        load_text_ys.append(value_y)
+    load_text_xs: list[float] = []
+    active_components = [
+        component
+        for component in load_components
+        if any(abs(float(row.get(component[1], 0.0))) > 1e-9 for _, rows in grouped_rows for row in rows)
+    ]
+    active_components = active_components or load_components[:3]
+    row_block_height = load_line_gap * (len(active_components) + 1)
+    group_gap = max(150.0, load_line_gap * 1.25)
+    for row_index, (row_y, rows) in enumerate(grouped_rows):
+        x_positions = [float(row.get("x_mm", 0.0)) for row in rows]
+        if not x_positions:
+            continue
+        label_x = min(x_positions) - max(360.0, width_x_mm * 0.045)
+        row_prefixes = {
+            "".join(ch for ch in str(row.get("name", "")) if not ch.isdigit()).strip()
+            for row in rows
+        }
+        row_prefixes.discard("")
+        row_title = f"{sorted(row_prefixes)[0]} row" if len(row_prefixes) == 1 else f"y {row_y:+.0f}"
+        if row_count > 1:
+            header_y = abut_y + load_value_gap + load_line_gap * len(active_components)
+            header_y += (row_count - 1 - row_index) * (row_block_height + group_gap)
+        else:
+            header_y = -abut_y - load_value_gap
+        row_ys = [header_y]
+        if row_count > 1:
+            row_ys += [header_y - load_line_gap * (index + 1) for index in range(len(active_components))]
+        else:
+            row_ys += [header_y - load_line_gap * (index + 1) for index in range(len(active_components))]
+        load_text_ys.extend(row_ys)
+        load_text_xs.extend([label_x, *x_positions])
+
         _add_load_tag(
             fig,
-            x=x,
-            y=value_y,
-            text="<br>".join(tag_lines),
-            color="#7c3aed",
-            xanchor="center",
-            yanchor="bottom" if row_count > 1 else "top",
-            text_xshift=((lane_index % 2) * 2 - 1) * 8,
+            x=label_x,
+            y=header_y,
+            text=f"<b>{row_title}</b>",
+            color="#334155",
+            xanchor="right",
+            yanchor="middle",
         )
+        for row_item, x in zip(rows, x_positions):
+            _add_load_tag(
+                fig,
+                x=x,
+                y=header_y,
+                text=f"<b>{row_item.get('name', '')}</b>",
+                color="#334155",
+                xanchor="center",
+                yanchor="middle",
+            )
+
+        for component_index, (label, key, unit, color) in enumerate(active_components, start=1):
+            component_y = header_y - load_line_gap * component_index
+            _add_load_tag(
+                fig,
+                x=label_x,
+                y=component_y,
+                text=f"{label} ({unit})",
+                color=color,
+                xanchor="right",
+                yanchor="middle",
+            )
+            for row_item, x in zip(rows, x_positions):
+                _add_load_tag(
+                    fig,
+                    x=x,
+                    y=component_y,
+                    text=_compact_load_value(float(row_item.get(key, 0.0))),
+                    color=color,
+                    xanchor="center",
+                    yanchor="middle",
+                )
 
     axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
     axis_origin_x = -pile_x - axis_gap
@@ -1343,8 +1399,8 @@ def plan_view(
     text_y_max = max(load_text_ys) if load_text_ys else pile_y
     _add_autorange_points(
         fig,
-        min(axis_origin_x - pad * 0.25, -pile_x - pad),
-        pile_x + pad,
+        min(axis_origin_x - pad * 0.25, min(load_text_xs) - pad * 0.28 if load_text_xs else -pile_x - pad, -pile_x - pad),
+        max(max(load_text_xs) + pad * 0.28 if load_text_xs else pile_x + pad, pile_x + pad),
         min(axis_origin_y - pad * 0.25, text_y_min - pad * 0.18, -pile_y - pad),
         max(text_y_max + pad * 0.18, pile_y + pad),
     )
