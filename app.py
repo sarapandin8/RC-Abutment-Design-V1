@@ -1302,7 +1302,7 @@ def plan_view(
     ]
     row_count = len(grouped_rows)
     load_value_gap = max(half * 2.45, min(440.0, depth_y_mm * 0.34))
-    load_line_gap = max(150.0, half * 1.08)
+    load_line_gap = max(175.0, half * 1.08)
     load_components = [
         ("Pu_x", "Pu_x_kN", "kN", COLORS["axis_x"]),
         ("Pu_y", "Pu_y_kN", "kN", COLORS["axis_y"]),
