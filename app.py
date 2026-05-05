@@ -1737,7 +1737,7 @@ def side_view(
     for row_index, (row_y, rows) in enumerate(grouped_rows):
         if not rows:
             continue
-        column_gap = max(900.0, bearing_size_mm * 3.6)
+        column_gap = max(2200.0, SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM * 3.4, bearing_size_mm * 8.8)
         table_span = column_gap * max(len(rows) - 1, 1)
         table_x_positions = [
             -table_span / 2.0 + index * column_gap
@@ -1813,7 +1813,7 @@ def side_view(
         max(max(load_z_extents) + pad * 0.45, max(load_text_zs) + pad * 0.18 if load_text_zs else max(load_z_extents) + pad),
     )
     fig = _finish_view(fig, "Side view", "y (mm)", "z (mm)", show_zero_axes=False)
-    fig.update_layout(height=640)
+    fig.update_layout(height=720)
     return fig
 
 
