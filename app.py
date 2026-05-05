@@ -1095,9 +1095,9 @@ def _add_load_arrow(
         ayref="y",
         text=label,
         showarrow=True,
-        arrowhead=3,
-        arrowsize=1.05,
-        arrowwidth=2.2,
+        arrowhead=2,
+        arrowsize=0.78,
+        arrowwidth=1.75,
         arrowcolor=color,
         xshift=text_xshift,
         yshift=text_yshift,
@@ -1164,6 +1164,7 @@ def _add_moment_arc(
             showlegend=False,
         )
     )
+    arrow_text = _load_label(label, moment, "kN-m") if label else ""
     fig.add_annotation(
         x=xs[-1],
         y=ys[-1],
@@ -1173,11 +1174,11 @@ def _add_moment_arc(
         yref="y",
         axref="x",
         ayref="y",
-        text=_load_label(label, moment, "kN-m"),
+        text=arrow_text,
         showarrow=True,
-        arrowhead=3,
-        arrowsize=1.0,
-        arrowwidth=2,
+        arrowhead=2,
+        arrowsize=0.8,
+        arrowwidth=1.75,
         arrowcolor=color,
         xshift=text_xshift,
         yshift=text_yshift,
@@ -1438,40 +1439,45 @@ def front_view(
     arrow_min = min(110.0, arrow_max * 0.45)
     moment_radius = max(155.0, bearing_size_mm * 0.82)
     load_clearance = max(46.0, half * 0.42)
-    load_lane_gap = max(115.0, half * 0.85)
     load_x_extents = [-pile_x, pile_x]
     load_z_extents = [-pilecap_thickness_mm, height_z_mm + bearing_h]
-    projected_slot_counter: dict[float, int] = {}
-    for index, row in enumerate(bearing_records):
-        x = float(row.get("x_mm", 0.0))
-        z = float(row.get("z_mm", height_z_mm))
-        projected_key = round(x, 3)
-        lane_index = projected_slot_counter.get(projected_key, 0)
-        projected_slot_counter[projected_key] = lane_index + 1
-        px = float(row.get("Pu_x_kN", 0.0))
-        pz = float(row.get("Pu_z_kN", 0.0))
-        my = float(row.get("Mu_y_kNm", 0.0))
-        lane_z = z + bearing_h + load_clearance + lane_index * load_lane_gap
-        arc_radius = moment_radius + (lane_index % 4) * max(52.0, half * 0.42)
+
+    def representative_load(rows: list[dict], key: str) -> float:
+        values = [float(row.get(key, 0.0)) for row in rows]
+        resultant = sum(values)
+        if abs(resultant) > 1e-9:
+            return resultant
+        return max(values, key=lambda value: abs(value), default=0.0)
+
+    projected_groups: dict[tuple[float, float], list[dict]] = {}
+    for row in bearing_records:
+        projected_key = (round(float(row.get("x_mm", 0.0)), 3), round(float(row.get("z_mm", height_z_mm)), 3))
+        projected_groups.setdefault(projected_key, []).append(row)
+
+    for (x_key, z_key), rows in sorted(projected_groups.items(), key=lambda item: item[0][0]):
+        x = float(x_key)
+        z = float(z_key)
+        px = representative_load(rows, "Pu_x_kN")
+        pz = representative_load(rows, "Pu_z_kN")
+        my = representative_load(rows, "Mu_y_kNm")
+        load_head_z = z + bearing_h + load_clearance
         px_delta = _scaled_load_delta(px, front_force_max, arrow_max, arrow_min)
         if abs(px_delta) > 1e-9:
             _add_load_arrow(
                 fig,
                 x=x,
-                y=lane_z,
+                y=load_head_z,
                 dx=px_delta,
                 dy=0.0,
-                label=_load_label("Pu_x", px, "kN"),
+                label="",
                 color=COLORS["axis_x"],
-                text_xshift=10 if px_delta > 0 else -10,
-                text_yshift=8,
             )
             load_x_extents.extend([x, x + px_delta])
-            load_z_extents.append(lane_z)
+            load_z_extents.append(load_head_z)
         pz_delta = _scaled_load_delta(pz, front_force_max, arrow_max, arrow_min)
         pz_len = abs(pz_delta)
         if pz_len > 1e-9:
-            pz_tail_z = lane_z + pz_len if pz >= 0.0 else lane_z
+            pz_tail_z = load_head_z + pz_len if pz >= 0.0 else load_head_z
             pz_dz = -pz_len if pz >= 0.0 else pz_len
             _add_load_arrow(
                 fig,
@@ -1479,10 +1485,8 @@ def front_view(
                 y=pz_tail_z,
                 dx=0.0,
                 dy=pz_dz,
-                label=_load_label("Pu_z", pz, "kN"),
+                label="",
                 color=COLORS["axis_z"],
-                text_xshift=18 if lane_index % 2 == 0 else -18,
-                text_yshift=4 if pz_dz >= 0.0 else -4,
             )
             load_x_extents.append(x)
             load_z_extents.extend([pz_tail_z, pz_tail_z + pz_dz])
@@ -1490,16 +1494,99 @@ def front_view(
             fig,
             x=x,
             y=z + bearing_h / 2.0,
-            radius=arc_radius,
+            radius=moment_radius,
             moment=my,
-            label="Mu_y",
+            label="",
             color="#7c3aed",
-            text_xshift=(lane_index % 3 - 1) * 14,
-            text_yshift=12 + (lane_index % 4) * 8,
         )
         if abs(my) > 1e-9:
-            load_x_extents.extend([x - arc_radius, x + arc_radius])
-            load_z_extents.extend([z + bearing_h / 2.0 - arc_radius, z + bearing_h / 2.0 + arc_radius])
+            load_x_extents.extend([x - moment_radius, x + moment_radius])
+            load_z_extents.extend([z + bearing_h / 2.0 - moment_radius, z + bearing_h / 2.0 + moment_radius])
+
+    front_load_components = [
+        ("Pu_x", "Pu_x_kN", "kN", COLORS["axis_x"]),
+        ("Pu_y", "Pu_y_kN", "kN", COLORS["axis_y"]),
+        ("Pu_z", "Pu_z_kN", "kN", COLORS["axis_z"]),
+        ("Mu_x", "Mu_x_kNm", "kN-m", "#7c3aed"),
+        ("Mu_y", "Mu_y_kNm", "kN-m", "#7c3aed"),
+    ]
+    active_components = [
+        component
+        for component in front_load_components
+        if any(abs(float(row.get(component[1], 0.0))) > 1e-9 for row in bearing_records)
+    ]
+    active_components = active_components or front_load_components[:3]
+    row_groups: dict[float, list[dict]] = {}
+    for row in bearing_records:
+        row_key = round(float(row.get("y_mm", 0.0)), 3)
+        row_groups.setdefault(row_key, []).append(row)
+    grouped_rows = [
+        (row_y, sorted(rows, key=lambda item: float(item.get("x_mm", 0.0))))
+        for row_y, rows in sorted(row_groups.items(), key=lambda item: item[0], reverse=True)
+    ]
+    load_line_gap = 175.0
+    row_block_height = load_line_gap * (len(active_components) + 1)
+    group_gap = max(220.0, load_line_gap * 1.35)
+    table_clearance = max(260.0, load_line_gap * 1.15)
+    table_anchor_z = max(load_z_extents) + table_clearance
+    load_text_xs: list[float] = []
+    load_text_zs: list[float] = []
+    for row_index, (row_y, rows) in enumerate(grouped_rows):
+        x_positions = [float(row.get("x_mm", 0.0)) for row in rows]
+        if not x_positions:
+            continue
+        label_x = min(x_positions) - max(360.0, width_x_mm * 0.045)
+        row_prefixes = {
+            "".join(ch for ch in str(row.get("name", "")) if not ch.isdigit()).strip()
+            for row in rows
+        }
+        row_prefixes.discard("")
+        row_title = f"{sorted(row_prefixes)[0]} row" if len(row_prefixes) == 1 else f"y {row_y:+.0f}"
+        header_z = table_anchor_z + load_line_gap * len(active_components)
+        header_z += (len(grouped_rows) - 1 - row_index) * (row_block_height + group_gap)
+        load_text_zs.append(header_z)
+        load_text_xs.extend([label_x, *x_positions])
+        _add_load_tag(
+            fig,
+            x=label_x,
+            y=header_z,
+            text=f"<b>{row_title}</b>",
+            color="#334155",
+            xanchor="right",
+            yanchor="middle",
+        )
+        for row_item, x in zip(rows, x_positions):
+            _add_load_tag(
+                fig,
+                x=x,
+                y=header_z,
+                text=f"<b>{row_item.get('name', '')}</b>",
+                color="#334155",
+                xanchor="center",
+                yanchor="middle",
+            )
+        for component_index, (label, key, unit, color) in enumerate(active_components, start=1):
+            component_z = header_z - load_line_gap * component_index
+            load_text_zs.append(component_z)
+            _add_load_tag(
+                fig,
+                x=label_x,
+                y=component_z,
+                text=f"{label} ({unit})",
+                color=color,
+                xanchor="right",
+                yanchor="middle",
+            )
+            for row_item, x in zip(rows, x_positions):
+                _add_load_tag(
+                    fig,
+                    x=x,
+                    y=component_z,
+                    text=_compact_load_value(float(row_item.get(key, 0.0))),
+                    color=color,
+                    xanchor="center",
+                    yanchor="middle",
+                )
 
     axis_gap = max(950.0, max(width_x_mm, height_z_mm) * 0.15)
     axis_origin_x = -pile_x - axis_gap
@@ -1512,10 +1599,10 @@ def front_view(
     pad = max(width_x_mm, height_z_mm) * 0.10
     _add_autorange_points(
         fig,
-        min(axis_origin_x - pad * 0.25, min(load_x_extents) - pad),
-        max(load_x_extents) + pad,
+        min(axis_origin_x - pad * 0.25, min(load_x_extents) - pad, min(load_text_xs) - pad * 0.28 if load_text_xs else -pile_x - pad),
+        max(max(load_x_extents) + pad, max(load_text_xs) + pad * 0.28 if load_text_xs else pile_x + pad),
         min(axis_origin_z - pad * 0.25, min(load_z_extents) - pad * 0.25),
-        max(load_z_extents) + pad * 0.45,
+        max(max(load_z_extents) + pad * 0.45, max(load_text_zs) + pad * 0.18 if load_text_zs else max(load_z_extents) + pad),
     )
     return _finish_view(fig, "Front view", "x (mm)", "z (mm)", show_zero_axes=False)
 
