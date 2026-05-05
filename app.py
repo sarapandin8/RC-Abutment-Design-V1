@@ -136,7 +136,7 @@ def default_code_parameters(code_name: str) -> CodeParameters:
             phi_compression=0.75,
             phi_flexure=0.90,
             phi_method="aashto_axial",
-            axial_cap_factor=1.00,
+            axial_cap_factor=0.80,
         )
     return CodeParameters(
         name="ACI 318 style",
@@ -505,7 +505,9 @@ def _section_response(
         distance_from_compression_edge = pmax - projection
         strain = params.eps_cu * (1.0 - distance_from_compression_edge / c_mm)
         stress = _steel_stress_mpa(strain, fy_mpa, es_mpa)
-        force_n = stress * bar.area_mm2
+        stress_block_contains_bar = projection >= threshold - 1e-9
+        concrete_replacement_stress = 0.85 * fc_mpa if stress_block_contains_bar and stress > 0.0 else 0.0
+        force_n = (stress - concrete_replacement_stress) * bar.area_mm2
         pn_n += force_n
         mx_nmm += force_n * bar.y_mm
         my_nmm += -force_n * bar.x_mm
@@ -2963,6 +2965,10 @@ with tabs[3]:
         DB32 uses fy = 490 MPa. The current version assumes one vertical bar size for the checked section.
 
         ACI style uses strain-based phi interpolation. AASHTO LRFD style uses editable defaults with axial-to-flexural phi interpolation.
+        The AASHTO default axial cap factor is `0.80`, consistent with tied compression members; edit this value only
+        when another confinement condition or project criterion applies. In strain compatibility, bars inside the
+        concrete compression stress block are counted with net steel force `As(fs - 0.85f'c)` so that the concrete
+        displaced by compression reinforcement is not double-counted.
         Pile cap geometry is drawn only as context and is not designed.
 
         **Engineering note**
