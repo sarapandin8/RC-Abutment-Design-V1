@@ -992,6 +992,7 @@ COLORS = {
 }
 
 LOAD_TABLE_LINE_GAP_MM = 175.0
+FRONT_VIEW_LOAD_TABLE_LINE_GAP_MM = LOAD_TABLE_LINE_GAP_MM * 1.5
 SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 650.0
 
 
@@ -1552,7 +1553,7 @@ def front_view(
         (row_y, sorted(rows, key=lambda item: float(item.get("x_mm", 0.0))))
         for row_y, rows in sorted(row_groups.items(), key=lambda item: item[0], reverse=True)
     ]
-    load_line_gap = LOAD_TABLE_LINE_GAP_MM
+    load_line_gap = FRONT_VIEW_LOAD_TABLE_LINE_GAP_MM
     row_block_height = load_line_gap * (len(active_components) + 1)
     group_gap = max(220.0, load_line_gap * 1.35)
     table_clearance = max(260.0, load_line_gap * 1.15)
