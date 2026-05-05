@@ -298,17 +298,40 @@ def effective_strip_recommendation(
 ) -> dict[str, float]:
     selected = selected_bearings(records, selected_names) or records
     selected_x = [float(row.get("x_mm", 0.0)) for row in selected]
-    loaded_width = bearing_size_mm + (max(selected_x) - min(selected_x) if selected_x else 0.0)
+    selected_min_x = min(selected_x) if selected_x else 0.0
+    selected_max_x = max(selected_x) if selected_x else 0.0
+    loaded_width = bearing_size_mm + (selected_max_x - selected_min_x if selected_x else 0.0)
     distribution_limit = loaded_width + 4.0 * depth_y_mm
-    spacing_limit = _min_positive_spacing_mm(float(row.get("x_mm", 0.0)) for row in records)
+    all_x = sorted({round(float(row.get("x_mm", 0.0)), 3) for row in records})
+    spacing_limit = _min_positive_spacing_mm(all_x)
     if not math.isfinite(spacing_limit):
         spacing_limit = full_width_x_mm
+    left_edge_x = -full_width_x_mm / 2.0
+    right_edge_x = full_width_x_mm / 2.0
+    left_edge_center_distance = max(0.0, selected_min_x - left_edge_x)
+    right_edge_center_distance = max(0.0, right_edge_x - selected_max_x)
+    left_neighbors = [x for x in all_x if x < selected_min_x - 1e-6]
+    right_neighbors = [x for x in all_x if x > selected_max_x + 1e-6]
+    left_boundary = (
+        (max(left_neighbors) + selected_min_x) / 2.0
+        if left_neighbors
+        else left_edge_x
+    )
+    right_boundary = (
+        (min(right_neighbors) + selected_max_x) / 2.0
+        if right_neighbors
+        else right_edge_x
+    )
+    tributary_limit = max(loaded_width, right_boundary - left_boundary)
     available_limit = full_width_x_mm
-    recommended = min(distribution_limit, spacing_limit, available_limit)
+    recommended = min(distribution_limit, tributary_limit, available_limit)
     return {
         "loaded_width_mm": loaded_width,
         "distribution_limit_mm": distribution_limit,
         "spacing_limit_mm": spacing_limit,
+        "left_edge_center_distance_mm": left_edge_center_distance,
+        "right_edge_center_distance_mm": right_edge_center_distance,
+        "tributary_limit_mm": tributary_limit,
         "available_limit_mm": available_limit,
         "recommended_width_mm": max(1.0, recommended),
     }
@@ -2627,10 +2650,16 @@ spacing_text = (
     if math.isfinite(strip_info["spacing_limit_mm"])
     else "not limited"
 )
+edge_text = (
+    f"left {strip_info['left_edge_center_distance_mm']:,.0f} mm, "
+    f"right {strip_info['right_edge_center_distance_mm']:,.0f} mm"
+)
 st.caption(
     "Strength check uses local x about the selected strip center. "
     f"Effective width guide: loaded width + 4t = {strip_info['distribution_limit_mm']:,.0f} mm, "
-    f"bearing spacing limit = {spacing_text}, available length = {strip_info['available_limit_mm']:,.0f} mm."
+    f"tributary/edge limit = {strip_info['tributary_limit_mm']:,.0f} mm "
+    f"(edge-center distances: {edge_text}; typical c/c spacing = {spacing_text}), "
+    f"available length = {strip_info['available_limit_mm']:,.0f} mm."
 )
 if strip_width_mode != "Full abutment width":
     st.info(
@@ -2853,14 +2882,17 @@ with tabs[3]:
 
         The automatic strip recommendation is:
 
-        `beff = min(l_loaded + 4t, s_cc, L_available)`
+        `beff = min(l_loaded + 4t, b_trib, L_available)`
 
         where:
 
         `beff` = effective width used in the strength section  
         `l_loaded` = loaded bearing/group width in x, taken as bearing size plus the distance between the outermost selected bearings  
         `t` = abutment thickness along y  
-        `s_cc` = center-to-center spacing to the adjacent bearing line in x  
+        `b_trib` = tributary/edge width in x. At an exterior bearing line, the edge side uses the distance
+        from the abutment/pier free edge to the center of the outermost bearing; the interior side uses
+        the midpoint to the adjacent bearing line. At an interior bearing line, both sides use midpoint
+        tributary limits to adjacent bearing lines.  
         `L_available` = available abutment length between free edges, joints, or other physical limits
 
         The section properties for axial strength are then based on:
