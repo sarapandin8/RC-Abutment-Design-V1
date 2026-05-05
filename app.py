@@ -1012,12 +1012,24 @@ def _add_axis_arrow(
         yref="y",
         axref="x",
         ayref="y",
-        text=label,
+        text="",
         showarrow=True,
         arrowhead=3,
         arrowsize=1.2,
         arrowwidth=2,
         arrowcolor=color,
+    )
+    label_xshift = 14 if abs(dx) >= abs(dy) else 10
+    label_yshift = -10 if abs(dx) >= abs(dy) else 14
+    fig.add_annotation(
+        x=x + dx,
+        y=y + dy,
+        xref="x",
+        yref="y",
+        text=label,
+        showarrow=False,
+        xshift=label_xshift if dx >= 0 else -label_xshift,
+        yshift=label_yshift if dy >= 0 else -label_yshift,
         font={"color": color, "size": 12},
     )
 
@@ -1079,6 +1091,8 @@ def _add_load_tag(
     y: float,
     text: str,
     color: str,
+    xanchor: str = "center",
+    yanchor: str = "middle",
 ) -> None:
     if not text:
         return
@@ -1087,6 +1101,8 @@ def _add_load_tag(
         y=y,
         text=text,
         showarrow=False,
+        xanchor=xanchor,
+        yanchor=yanchor,
         align="left",
         font={"color": color, "size": 9},
     )
@@ -1248,8 +1264,10 @@ def plan_view(
         fig.add_annotation(x=x, y=y, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     plan_force_max = _max_abs_component(bearing_records, ("Pu_x_kN", "Pu_y_kN"))
-    arrow_max = min(max(max(width_x_mm, depth_y_mm) * 0.075, 240.0), 720.0)
-    arrow_min = min(180.0, arrow_max * 0.55)
+    arrow_max = min(max(max(width_x_mm, depth_y_mm) * 0.045, 180.0), 420.0)
+    arrow_min = min(90.0, arrow_max * 0.45)
+    row_count = len({round(float(row.get("y_mm", 0.0)), 3) for row in bearing_records})
+    load_value_gap = max(half * 2.25, min(360.0, depth_y_mm * 0.25))
     for row in bearing_records:
         x = float(row.get("x_mm", 0.0))
         y = float(row.get("y_mm", 0.0))
@@ -1261,34 +1279,41 @@ def plan_view(
         _add_load_arrow(
             fig,
             x=x,
-            y=y + half * 1.15,
+            y=y,
             dx=_scaled_load_delta(px, plan_force_max, arrow_max, arrow_min),
             dy=0.0,
-            label=_load_label("Pu_x", px, "kN"),
+            label="Pu_x",
             color=COLORS["axis_x"],
         )
         _add_load_arrow(
             fig,
-            x=x - half * 1.15,
+            x=x,
             y=y,
             dx=0.0,
             dy=_scaled_load_delta(py, plan_force_max, arrow_max, arrow_min),
-            label=_load_label("Pu_y", py, "kN"),
+            label="Pu_y",
             color=COLORS["axis_y"],
         )
         tag_lines: list[str] = []
+        if abs(px) > 1e-9:
+            tag_lines.append(_load_label("Pu_x", px, "kN"))
+        if abs(py) > 1e-9:
+            tag_lines.append(_load_label("Pu_y", py, "kN"))
         if abs(pz) > 1e-9:
             tag_lines.append(f"Pu_z {pz:+.0f} kN")
         if abs(mx) > 1e-9:
             tag_lines.append(f"Mu_x {mx:+.0f} kN-m")
         if abs(my) > 1e-9:
             tag_lines.append(f"Mu_y {my:+.0f} kN-m")
+        value_y = y + load_value_gap if row_count > 1 else y - load_value_gap
         _add_load_tag(
             fig,
-            x=x + half * 1.55,
-            y=y - half * 1.55,
+            x=x,
+            y=value_y,
             text="<br>".join(tag_lines),
             color="#7c3aed",
+            xanchor="center",
+            yanchor="bottom" if row_count > 1 else "top",
         )
     _add_load_legend(fig, "Loads shown: Pu_x blue, Pu_y red, Pu_z / Mu tags purple")
 
@@ -1333,8 +1358,8 @@ def front_view(
         fig.add_annotation(x=x, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     front_force_max = _max_abs_component(bearing_records, ("Pu_x_kN", "Pu_z_kN"))
-    arrow_max = min(max(max(width_x_mm, height_z_mm) * 0.075, 260.0), 760.0)
-    arrow_min = min(190.0, arrow_max * 0.55)
+    arrow_max = min(max(max(width_x_mm, height_z_mm) * 0.055, 220.0), 500.0)
+    arrow_min = min(110.0, arrow_max * 0.45)
     moment_radius = max(135.0, bearing_size_mm * 0.72)
     for row in bearing_records:
         x = float(row.get("x_mm", 0.0))
@@ -1345,19 +1370,19 @@ def front_view(
         _add_load_arrow(
             fig,
             x=x,
-            y=z + bearing_h + half * 0.45,
+            y=z + bearing_h / 2.0,
             dx=_scaled_load_delta(px, front_force_max, arrow_max, arrow_min),
             dy=0.0,
-            label=_load_label("Pu_x", px, "kN"),
+            label="Pu_x",
             color=COLORS["axis_x"],
         )
         _add_load_arrow(
             fig,
-            x=x + half * 0.62,
-            y=z + bearing_h + half * 0.35,
+            x=x,
+            y=z + bearing_h / 2.0,
             dx=0.0,
             dy=-_scaled_load_delta(pz, front_force_max, arrow_max, arrow_min),
-            label=_load_label("Pu_z", pz, "kN"),
+            label="Pu_z",
             color=COLORS["axis_z"],
         )
         _add_moment_arc(
@@ -1412,8 +1437,8 @@ def side_view(
         fig.add_annotation(x=y, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     side_force_max = _max_abs_component(bearing_records, ("Pu_y_kN", "Pu_z_kN"))
-    arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.095, 240.0), 720.0)
-    arrow_min = min(180.0, arrow_max * 0.55)
+    arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.060, 210.0), 460.0)
+    arrow_min = min(105.0, arrow_max * 0.45)
     moment_radius = max(135.0, bearing_size_mm * 0.72)
     for row in bearing_records:
         y = float(row.get("y_mm", 0.0))
@@ -1424,19 +1449,19 @@ def side_view(
         _add_load_arrow(
             fig,
             x=y,
-            y=z + bearing_h + half * 0.45,
+            y=z + bearing_h / 2.0,
             dx=_scaled_load_delta(py, side_force_max, arrow_max, arrow_min),
             dy=0.0,
-            label=_load_label("Pu_y", py, "kN"),
+            label="Pu_y",
             color=COLORS["axis_y"],
         )
         _add_load_arrow(
             fig,
-            x=y + half * 0.62,
-            y=z + bearing_h + half * 0.35,
+            x=y,
+            y=z + bearing_h / 2.0,
             dx=0.0,
             dy=-_scaled_load_delta(pz, side_force_max, arrow_max, arrow_min),
-            label=_load_label("Pu_z", pz, "kN"),
+            label="Pu_z",
             color=COLORS["axis_z"],
         )
         _add_moment_arc(
