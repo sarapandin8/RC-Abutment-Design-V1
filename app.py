@@ -548,6 +548,36 @@ def _phi_pmax_kn(
     return params.axial_cap_factor * params.phi_compression * po_n / 1000.0
 
 
+def shrinkage_temperature_ratio(code_name: str, fy_mpa: float) -> tuple[float, str]:
+    if "AASHTO" in code_name.upper():
+        # AASHTO style As >= 0.11 Ag / fy with fy in ksi; 0.11 * 6.89476 = 0.75842 for MPa.
+        return 0.75842 / max(fy_mpa, 1.0), "AASHTO LRFD style: As >= 0.11 Ag / fy"
+    if fy_mpa < 420.0:
+        return 0.0020, "ACI shrinkage-temperature style: rho = 0.0020 for fy < 420 MPa"
+    return max(0.0014, 0.0018 * 420.0 / fy_mpa), "ACI shrinkage-temperature style: rho >= 0.0018*420/fy, not less than 0.0014"
+
+
+def minimum_reinforcement_check(check: SectionCheck, code_name: str) -> dict[str, float | str]:
+    rho_req, basis = shrinkage_temperature_ratio(code_name, check.fy_mpa)
+    ag = check.width_x_mm * check.depth_y_mm
+    as_min_total = rho_req * ag
+    bar_area = bar_area_mm2(check.bar_dia_mm)
+    as_top_bottom_face = check.bars_x_face * bar_area
+    as_min_each_main_face = as_min_total / 2.0
+    total_status = "OK" if check.as_total_mm2 + 1e-9 >= as_min_total else "NG"
+    face_status = "OK" if as_top_bottom_face + 1e-9 >= as_min_each_main_face else "NG"
+    return {
+        "basis": basis,
+        "rho_req_percent": rho_req * 100.0,
+        "as_min_total_mm2": as_min_total,
+        "as_provided_total_mm2": check.as_total_mm2,
+        "total_status": total_status,
+        "as_min_each_main_face_mm2": as_min_each_main_face,
+        "as_provided_each_top_bottom_face_mm2": as_top_bottom_face,
+        "face_status": face_status,
+    }
+
+
 def interaction_curve(
     *,
     width_x_mm: float,
@@ -2773,6 +2803,35 @@ with tabs[0]:
             f"{check.bars_y_face} bars along y on each left/right face"
         )
         st.info(rebar_text)
+        min_reinf = minimum_reinforcement_check(check, code_choice)
+        st.subheader("Minimum Reinforcement Check")
+        st.caption(
+            "Shrinkage/temperature-style distributed longitudinal reinforcement only. "
+            "Column longitudinal minimum such as 1%Ag is intentionally not applied for this abutment/pier strip check."
+        )
+        min_reinf_table = pd.DataFrame(
+            [
+                ["basis", min_reinf["basis"], "", ""],
+                ["required rho", f"{float(min_reinf['rho_req_percent']):.3f}", "%", ""],
+                ["As,min total", f"{float(min_reinf['as_min_total_mm2']):,.0f}", "mm2", ""],
+                ["As provided total", f"{float(min_reinf['as_provided_total_mm2']):,.0f}", "mm2", str(min_reinf["total_status"])],
+                ["As,min each main face", f"{float(min_reinf['as_min_each_main_face_mm2']):,.0f}", "mm2", ""],
+                [
+                    "As provided each top/bottom face",
+                    f"{float(min_reinf['as_provided_each_top_bottom_face_mm2']):,.0f}",
+                    "mm2",
+                    str(min_reinf["face_status"]),
+                ],
+                ["max c/c spacing advisory", f"{check.max_center_spacing_mm:,.0f} / {check.max_spacing_advisory_mm:,.0f}", "mm", check.spacing_status],
+            ],
+            columns=["Item", "Value", "Unit", "Status"],
+        )
+        st.dataframe(min_reinf_table, width="stretch", hide_index=True)
+        if min_reinf["total_status"] != "OK" or min_reinf["face_status"] != "OK":
+            st.warning(
+                "Shrinkage/temperature minimum reinforcement is not satisfied. Increase bar count, bar size, "
+                "or adjust the effective strip dimensions used for the check."
+            )
         if check.min_clear_spacing_mm < min_clear_spacing_mm:
             st.warning(
                 f"Clear spacing is {check.min_clear_spacing_mm:.0f} mm, less than the selected minimum "
@@ -2941,6 +3000,12 @@ with tabs[3]:
         The max spacing advisory shown on the section is a detailing aid. Its default value is `min(3t, 450 mm)`,
         where `t` is the abutment thickness along y, but it must be verified against the governing ACI/AASHTO edition,
         member classification, seismic requirements, and project specifications.
+        The Results tab also reports a shrinkage/temperature-style distributed longitudinal reinforcement check.
+        The app intentionally does not apply a column longitudinal minimum such as `Ast >= 1%Ag` because the checked
+        abutment/pier strip can have a very large gross area. For ACI style, the shrinkage/temperature ratio is taken
+        as `rho = 0.0020` when `fy < 420 MPa`, otherwise `rho >= 0.0018*420/fy` but not less than `0.0014`.
+        For AASHTO style, the app uses `As >= 0.11Ag/fy` with unit conversion for MPa. The check is reported for
+        total vertical steel and for each main top/bottom face in the plan-section drawing.
         Biaxial bending can be checked with the conservative linear interaction:
 
         `|Mux| / phi Mnx(Pu) + |Muy| / phi Mny(Pu) <= 1.0`
