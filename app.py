@@ -966,6 +966,9 @@ COLORS = {
     "grid": "#e5e7eb",
 }
 
+LOAD_TABLE_LINE_GAP_MM = 175.0
+SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 200.0
+
 
 def _add_rect(
     fig: go.Figure,
@@ -1303,7 +1306,7 @@ def plan_view(
     ]
     row_count = len(grouped_rows)
     load_value_gap = max(half * 2.45, min(440.0, depth_y_mm * 0.34))
-    load_line_gap = max(175.0, half * 1.08)
+    load_line_gap = LOAD_TABLE_LINE_GAP_MM
     load_components = [
         ("Pu_x", "Pu_x_kN", "kN", COLORS["axis_x"]),
         ("Pu_y", "Pu_y_kN", "kN", COLORS["axis_y"]),
@@ -1524,7 +1527,7 @@ def front_view(
         (row_y, sorted(rows, key=lambda item: float(item.get("x_mm", 0.0))))
         for row_y, rows in sorted(row_groups.items(), key=lambda item: item[0], reverse=True)
     ]
-    load_line_gap = 175.0
+    load_line_gap = LOAD_TABLE_LINE_GAP_MM
     row_block_height = load_line_gap * (len(active_components) + 1)
     group_gap = max(220.0, load_line_gap * 1.35)
     table_clearance = max(260.0, load_line_gap * 1.15)
@@ -1634,8 +1637,9 @@ def side_view(
         fig.add_annotation(x=y, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     side_force_max = _max_abs_component(bearing_records, ("Pu_y_kN", "Pu_z_kN"))
-    arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.060, 210.0), 460.0)
-    arrow_min = min(105.0, arrow_max * 0.45)
+    base_arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.060, 210.0), 460.0)
+    arrow_max = base_arrow_max * 2.0
+    arrow_min = min(105.0, base_arrow_max * 0.45) * 2.0
     moment_radius = max(155.0, bearing_size_mm * 0.82)
     load_clearance = max(46.0, half * 0.42)
     load_y_extents = [-pile_y, pile_y]
@@ -1723,10 +1727,10 @@ def side_view(
         (row_y, sorted(rows, key=lambda item: float(item.get("x_mm", 0.0))))
         for row_y, rows in sorted(row_groups.items(), key=lambda item: item[0], reverse=True)
     ]
-    load_line_gap = 175.0
+    load_line_gap = SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM
     row_block_height = load_line_gap * (len(active_components) + 1)
     group_gap = max(220.0, load_line_gap * 1.35)
-    table_clearance = max(260.0, load_line_gap * 1.15)
+    table_clearance = max(380.0, load_line_gap * 1.35)
     table_anchor_z = max(load_z_extents) + table_clearance
     load_text_axis_xs: list[float] = []
     load_text_zs: list[float] = []
