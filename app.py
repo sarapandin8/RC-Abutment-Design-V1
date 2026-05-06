@@ -3043,35 +3043,32 @@ elif "pending_bearing_table" not in st.session_state or len(st.session_state.pen
 
 editor_key = "bearing_load_editor"
 
-edited_bearing_table = st.data_editor(
-    st.session_state.pending_bearing_table,
-    key=editor_key,
-    on_change=sync_bearing_editor,
-    args=(editor_key,),
-    num_rows="fixed",
-    width="stretch",
-    hide_index=True,
-    column_config={
-        "name": st.column_config.TextColumn("Bearing"),
-        "x_mm": st.column_config.NumberColumn("x (mm)", step=50.0, format="%.0f"),
-        "y_mm": st.column_config.NumberColumn("y (mm)", step=50.0, format="%.0f"),
-        "z_mm": st.column_config.NumberColumn("z (mm)", step=50.0, format="%.0f"),
-        "Pu_x_kN": st.column_config.NumberColumn("Pu_x (kN)", step=10.0, format="%.1f"),
-        "Pu_y_kN": st.column_config.NumberColumn("Pu_y (kN)", step=10.0, format="%.1f"),
-        "Pu_z_kN": st.column_config.NumberColumn("Pu_z comp. (kN)", step=10.0, format="%.1f"),
-        "Mu_x_kNm": st.column_config.NumberColumn("Mu_x (kN-m)", step=10.0, format="%.1f"),
-        "Mu_y_kNm": st.column_config.NumberColumn("Mu_y (kN-m)", step=10.0, format="%.1f"),
-    },
-)
-update_data = st.button("Update Data", type="primary", width="stretch", key="update_bearing_data_button")
+with st.form("bearing_load_form"):
+    edited_bearing_table = st.data_editor(
+        st.session_state.pending_bearing_table,
+        key=editor_key,
+        num_rows="fixed",
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "name": st.column_config.TextColumn("Bearing"),
+            "x_mm": st.column_config.NumberColumn("x (mm)", step=50.0, format="%.0f"),
+            "y_mm": st.column_config.NumberColumn("y (mm)", step=50.0, format="%.0f"),
+            "z_mm": st.column_config.NumberColumn("z (mm)", step=50.0, format="%.0f"),
+            "Pu_x_kN": st.column_config.NumberColumn("Pu_x (kN)", step=10.0, format="%.1f"),
+            "Pu_y_kN": st.column_config.NumberColumn("Pu_y (kN)", step=10.0, format="%.1f"),
+            "Pu_z_kN": st.column_config.NumberColumn("Pu_z comp. (kN)", step=10.0, format="%.1f"),
+            "Mu_x_kNm": st.column_config.NumberColumn("Mu_x (kN-m)", step=10.0, format="%.1f"),
+            "Mu_y_kNm": st.column_config.NumberColumn("Mu_y (kN-m)", step=10.0, format="%.1f"),
+        },
+    )
+    update_data = st.form_submit_button("Update Data", type="primary", width="stretch")
 if update_data:
     committed_bearing_table = clean_bearings(pd.DataFrame(edited_bearing_table))
     st.session_state.bearing_table = committed_bearing_table
     st.session_state.pending_bearing_table = committed_bearing_table.copy()
     st.session_state.bearing_table_dirty = False
     st.success("Bearing load data updated. Calculations now use the latest table.")
-elif st.session_state.get("bearing_table_dirty", False):
-    st.warning("Bearing load edits are pending. Click Update Data before calculation.")
 
 bearings_df = clean_bearings(st.session_state.bearing_table)
 records = bearings_df.to_dict("records")
