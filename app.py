@@ -1589,7 +1589,7 @@ def plan_view(
                 )
 
     dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_size_mm * 2.20)
-    right_dim_x = abut_x + dim_gap
+    right_dim_x = abut_x + dim_gap * 1.65
     _add_dimension_line(
         fig,
         x0=right_dim_x,
@@ -1847,7 +1847,7 @@ def front_view(
                 )
 
     dim_gap = max(360.0, min(width_x_mm, height_z_mm) * 0.12, bearing_size_mm * 2.00)
-    right_dim_x = abut_x + dim_gap
+    right_dim_x = abut_x + dim_gap * 1.65
     _add_dimension_line(
         fig,
         x0=right_dim_x,
@@ -1876,7 +1876,7 @@ def front_view(
                 ext1=(right_x, height_z_mm),
                 text_yshift=8,
             )
-    abutment_dim_z = bearing_dim_z + dim_gap * 0.58
+    abutment_dim_z = bearing_dim_z + dim_gap * 1.15
     _add_dimension_line(
         fig,
         x0=-abut_x,
@@ -2095,18 +2095,6 @@ def side_view(
                 )
 
     dim_gap = max(360.0, min(depth_y_mm, height_z_mm) * 0.20, bearing_size_mm * 2.00)
-    bottom_dim_z = -pilecap_thickness_mm - dim_gap
-    _add_dimension_line(
-        fig,
-        x0=-abut_y,
-        y0=bottom_dim_z,
-        x1=abut_y,
-        y1=bottom_dim_z,
-        text=_format_mm(depth_y_mm, "Abutment t"),
-        ext0=(-abut_y, 0.0),
-        ext1=(abut_y, 0.0),
-    )
-
     right_dim_y = abut_y + dim_gap
     _add_dimension_line(
         fig,
@@ -2121,8 +2109,8 @@ def side_view(
     )
 
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
+    bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.90
     if y_centers:
-        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.90
         y_chain = [-abut_y, *y_centers, abut_y]
         for left_y, right_y in zip(y_chain[:-1], y_chain[1:]):
             _add_dimension_line(
@@ -2132,8 +2120,22 @@ def side_view(
                 x1=right_y,
                 y1=bearing_dim_z,
                 text=_format_mm(right_y - left_y),
+                ext0=(left_y, height_z_mm),
+                ext1=(right_y, height_z_mm),
                 text_yshift=8,
             )
+    abutment_dim_z = bearing_dim_z + dim_gap * 1.15
+    _add_dimension_line(
+        fig,
+        x0=-abut_y,
+        y0=abutment_dim_z,
+        x1=abut_y,
+        y1=abutment_dim_z,
+        text=_format_mm(depth_y_mm, "Abutment t"),
+        ext0=(-abut_y, height_z_mm),
+        ext1=(abut_y, height_z_mm),
+        text_yshift=8,
+    )
 
     axis_gap = max(950.0, max(depth_y_mm, height_z_mm) * 0.15)
     axis_origin_y = -pile_y - axis_gap
