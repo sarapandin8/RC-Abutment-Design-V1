@@ -2592,6 +2592,34 @@ st.markdown(
         padding: 0.8rem 0.9rem;
     }
     [data-testid="stMetricLabel"] { color: var(--muted); }
+    [data-testid="stTabs"] [role="tablist"] {
+        gap: 0.35rem;
+        border-bottom: 1px solid var(--line);
+    }
+    [data-testid="stTabs"] [role="tab"] {
+        min-height: 3rem;
+        padding: 0.65rem 1.0rem;
+        border: 1px solid transparent;
+        border-radius: 8px 8px 0 0;
+        color: #334155;
+    }
+    [data-testid="stTabs"] [role="tab"] p {
+        font-size: 1.30rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    [data-testid="stTabs"] [role="tab"]:hover {
+        background: #f8fafc;
+        border-color: #e2e8f0;
+    }
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+        background: #fff1f2;
+        border-color: #fecdd3;
+        box-shadow: inset 0 -3px 0 #ef4444;
+    }
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] p {
+        color: #e11d48;
+    }
     .status-pill {
         display: inline-flex;
         align-items: center;
