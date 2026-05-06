@@ -1207,7 +1207,7 @@ def _add_dimension_line(
         "text": "",
         "showarrow": True,
         "arrowhead": 3,
-        "arrowsize": 0.85,
+        "arrowsize": 1.70,
         "arrowwidth": DIMENSION_LINE_WIDTH,
         "arrowcolor": color,
     }
@@ -1589,19 +1589,6 @@ def plan_view(
                 )
 
     dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_size_mm * 2.20)
-    lowest_load_y = min(load_text_ys) if load_text_ys else -pile_y
-    bottom_dim_y = min(-abut_y - dim_gap, lowest_load_y - dim_gap)
-    _add_dimension_line(
-        fig,
-        x0=-abut_x,
-        y0=bottom_dim_y,
-        x1=abut_x,
-        y1=bottom_dim_y,
-        text=_format_mm(width_x_mm, "Abutment"),
-        ext0=(-abut_x, -abut_y),
-        ext1=(abut_x, -abut_y),
-    )
-
     right_dim_x = abut_x + dim_gap
     _add_dimension_line(
         fig,
@@ -1617,8 +1604,8 @@ def plan_view(
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
+    bearing_dim_y = max(abut_y + dim_gap * 1.10, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.80)
     if x_centers:
-        bearing_dim_y = max(abut_y + dim_gap * 1.10, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.80)
         x_chain = [-abut_x, *x_centers, abut_x]
         for left_x, right_x in zip(x_chain[:-1], x_chain[1:]):
             _add_dimension_line(
@@ -1628,8 +1615,22 @@ def plan_view(
                 x1=right_x,
                 y1=bearing_dim_y,
                 text=_format_mm(right_x - left_x),
+                ext0=(left_x, abut_y),
+                ext1=(right_x, abut_y),
                 text_yshift=8,
             )
+    abutment_dim_y = bearing_dim_y + dim_gap * 0.58
+    _add_dimension_line(
+        fig,
+        x0=-abut_x,
+        y0=abutment_dim_y,
+        x1=abut_x,
+        y1=abutment_dim_y,
+        text=_format_mm(width_x_mm, "Abutment"),
+        ext0=(-abut_x, abut_y),
+        ext1=(abut_x, abut_y),
+        text_yshift=8,
+    )
     if len(y_centers) > 1:
         row_dim_x = abut_x + dim_gap * 2.60
         y_chain = [-abut_y, *y_centers, abut_y]
@@ -1846,18 +1847,6 @@ def front_view(
                 )
 
     dim_gap = max(360.0, min(width_x_mm, height_z_mm) * 0.12, bearing_size_mm * 2.00)
-    bottom_dim_z = -pilecap_thickness_mm - dim_gap
-    _add_dimension_line(
-        fig,
-        x0=-abut_x,
-        y0=bottom_dim_z,
-        x1=abut_x,
-        y1=bottom_dim_z,
-        text=_format_mm(width_x_mm, "Abutment"),
-        ext0=(-abut_x, 0.0),
-        ext1=(abut_x, 0.0),
-    )
-
     right_dim_x = abut_x + dim_gap
     _add_dimension_line(
         fig,
@@ -1872,8 +1861,8 @@ def front_view(
     )
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
+    bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.90
     if x_centers:
-        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.90
         x_chain = [-abut_x, *x_centers, abut_x]
         for left_x, right_x in zip(x_chain[:-1], x_chain[1:]):
             _add_dimension_line(
@@ -1883,8 +1872,22 @@ def front_view(
                 x1=right_x,
                 y1=bearing_dim_z,
                 text=_format_mm(right_x - left_x),
+                ext0=(left_x, height_z_mm),
+                ext1=(right_x, height_z_mm),
                 text_yshift=8,
             )
+    abutment_dim_z = bearing_dim_z + dim_gap * 0.58
+    _add_dimension_line(
+        fig,
+        x0=-abut_x,
+        y0=abutment_dim_z,
+        x1=abut_x,
+        y1=abutment_dim_z,
+        text=_format_mm(width_x_mm, "Abutment"),
+        ext0=(-abut_x, height_z_mm),
+        ext1=(abut_x, height_z_mm),
+        text_yshift=8,
+    )
 
     axis_gap = max(950.0, max(width_x_mm, height_z_mm) * 0.15)
     axis_origin_x = -pile_x - axis_gap
