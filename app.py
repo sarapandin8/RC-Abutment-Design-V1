@@ -23,6 +23,7 @@ REBAR_FY_BY_DIA_MPA = {
 }
 PMM_METHOD = "PMM surface"
 BIAXIAL_METHODS = ["Load contour", "Linear", PMM_METHOD]
+DEAD_LOAD_FACTOR = 1.40
 
 ALPHA_GUIDANCE_MD = """
 **Load contour alpha guide**
@@ -70,6 +71,14 @@ class BearingResultant:
     @property
     def design_muy_knm(self) -> float:
         return abs(self.muy_knm)
+
+
+@dataclass(frozen=True)
+class DeadLoadSummary:
+    volume_m3: float
+    service_dl_kn: float
+    factor: float
+    uls_pu_z_kn: float
 
 
 @dataclass(frozen=True)
@@ -238,16 +247,70 @@ def combine_bearing_loads(records: Iterable[dict]) -> BearingResultant:
     )
 
 
-def pilecap_base_force_summary_table(resultant: BearingResultant, width_x_mm: float) -> pd.DataFrame:
+def abutment_dead_load_summary(
+    width_x_mm: float,
+    depth_y_mm: float,
+    height_z_mm: float,
+    unit_weight_kn_m3: float,
+    factor: float = DEAD_LOAD_FACTOR,
+) -> DeadLoadSummary:
+    volume_m3 = (
+        max(float(width_x_mm), 0.0)
+        * max(float(depth_y_mm), 0.0)
+        * max(float(height_z_mm), 0.0)
+        / 1_000_000_000.0
+    )
+    service_dl_kn = volume_m3 * max(float(unit_weight_kn_m3), 0.0)
+    dead_load_factor = float(factor)
+    return DeadLoadSummary(
+        volume_m3=volume_m3,
+        service_dl_kn=service_dl_kn,
+        factor=dead_load_factor,
+        uls_pu_z_kn=dead_load_factor * service_dl_kn,
+    )
+
+
+def pilecap_base_force_summary_table(
+    resultant: BearingResultant,
+    width_x_mm: float,
+    dead_load: DeadLoadSummary | None = None,
+) -> pd.DataFrame:
     width_m = max(float(width_x_mm) / 1000.0, 1e-9)
-    return pd.DataFrame(
+    dead_load_pu_kn = dead_load.uls_pu_z_kn if dead_load is not None else 0.0
+    total_pu_kn = resultant.pu_kn + dead_load_pu_kn
+    rows = [
+        {
+            "Resultant for pile cap": "Pu_z from bearings",
+            "Point at centroid": f"{resultant.pu_kn:,.2f} kN",
+            "Linearized over x width": f"{resultant.pu_kn / width_m:,.2f} kN/m",
+            "Basis": "sum(Pu_z from bearing table)",
+        },
+    ]
+    if dead_load is not None:
+        rows.extend(
+            [
+                {
+                    "Resultant for pile cap": "Abutment/pier self-weight DL",
+                    "Point at centroid": f"{dead_load.service_dl_kn:,.2f} kN",
+                    "Linearized over x width": f"{dead_load.service_dl_kn / width_m:,.2f} kN/m",
+                    "Basis": "gamma_c x Lx x t x H",
+                },
+                {
+                    "Resultant for pile cap": "Pu_z from 1.40D self-weight",
+                    "Point at centroid": f"{dead_load.uls_pu_z_kn:,.2f} kN",
+                    "Linearized over x width": f"{dead_load.uls_pu_z_kn / width_m:,.2f} kN/m",
+                    "Basis": f"{dead_load.factor:.2f} x self-weight DL",
+                },
+                {
+                    "Resultant for pile cap": "Total Pu_z for pile cap ULS",
+                    "Point at centroid": f"{total_pu_kn:,.2f} kN",
+                    "Linearized over x width": f"{total_pu_kn / width_m:,.2f} kN/m",
+                    "Basis": "bearing Pu_z + 1.40D self-weight",
+                },
+            ]
+        )
+    rows.extend(
         [
-            {
-                "Resultant for pile cap": "Pu_z axial compression",
-                "Point at centroid": f"{resultant.pu_kn:,.2f} kN",
-                "Linearized over x width": f"{resultant.pu_kn / width_m:,.2f} kN/m",
-                "Basis": "sum(Pu_z)",
-            },
             {
                 "Resultant for pile cap": "Mu_x about x",
                 "Point at centroid": f"{resultant.mux_knm:,.2f} kN-m",
@@ -262,6 +325,7 @@ def pilecap_base_force_summary_table(resultant: BearingResultant, width_x_mm: fl
             },
         ]
     )
+    return pd.DataFrame(rows)
 
 
 def _min_positive_spacing_mm(values: Iterable[float]) -> float:
@@ -2709,6 +2773,7 @@ PROJECT_SETTING_DEFAULTS = {
     "bearing_size_mm": 250.0,
     "pilecap_overhang_mm": 500.0,
     "pilecap_thickness_mm": 1500.0,
+    "concrete_unit_weight_kn_m3": 24.0,
     "cover_mm": 75.0,
     "min_clear_spacing_mm": 100.0,
     "max_spacing_advisory_mm": 450.0,
@@ -2975,6 +3040,14 @@ with st.sidebar:
     bearing_size_mm = st.number_input("Bearing plan size (mm)", min_value=100.0, value=250.0, step=25.0, key="bearing_size_mm")
     pilecap_overhang_mm = st.number_input("Pile cap overhang each side (mm)", min_value=0.0, value=500.0, step=50.0, key="pilecap_overhang_mm")
     pilecap_thickness_mm = st.number_input("Pile cap display thickness (mm)", min_value=300.0, value=1500.0, step=100.0, key="pilecap_thickness_mm")
+    concrete_unit_weight_kn_m3 = st.number_input(
+        "Concrete unit weight (kN/m3)",
+        min_value=18.0,
+        max_value=30.0,
+        value=24.0,
+        step=0.5,
+        key="concrete_unit_weight_kn_m3",
+    )
 
     st.header("Reinforcement")
     cover_mm = st.number_input("Clear cover to tie / outer bar (mm)", min_value=25.0, value=75.0, step=5.0, key="cover_mm")
@@ -3106,6 +3179,12 @@ if update_data:
 bearings_df = clean_bearings(st.session_state.bearing_table)
 records = bearings_df.to_dict("records")
 global_resultant = combine_bearing_loads(records)
+dead_load_summary = abutment_dead_load_summary(
+    width_x_mm=width_x_mm,
+    depth_y_mm=depth_y_mm,
+    height_z_mm=height_z_mm,
+    unit_weight_kn_m3=concrete_unit_weight_kn_m3,
+)
 
 st.subheader("Strength Design Strip")
 bearing_names = [str(row.get("name", "")) for row in records]
@@ -3396,16 +3475,23 @@ with tabs[1]:
 
     st.subheader("Pile Cap Base Force Summary")
     st.caption(
-        f"Uses all bearing loads transferred to the abutment/pier base centroid. "
+        f"Uses all bearing loads transferred to the abutment/pier base centroid and adds abutment/pier self-weight. "
         f"Coordinate origin is the centroid used by the bearing table; x width = {width_x_mm / 1000.0:,.3f} m. "
         "Compression Pu_z is positive, and moment signs follow the displayed axes."
     )
+    dl_cols = st.columns(4)
+    dl_cols[0].metric("DL volume", f"{dead_load_summary.volume_m3:,.3f} m3")
+    dl_cols[1].metric("Service DL", f"{dead_load_summary.service_dl_kn:,.2f} kN")
+    dl_cols[2].metric("DL factor", f"{dead_load_summary.factor:.2f}")
+    dl_cols[3].metric("Pu_z from 1.40D", f"{dead_load_summary.uls_pu_z_kn:,.2f} kN")
     st.dataframe(
-        pilecap_base_force_summary_table(global_resultant, width_x_mm),
+        pilecap_base_force_summary_table(global_resultant, width_x_mm, dead_load_summary),
         width="stretch",
         hide_index=True,
     )
     st.info(
+        "Self-weight is calculated as a rectangular abutment/pier block from the current Geometry inputs "
+        "(Lx x t x H x concrete unit weight). It is applied at the centroid, so it adds Pu_z only and no moment. "
         "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
         "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
         "Mu_y is kept as a point couple at the centroid because smearing it uniformly along x would hide the "
@@ -3464,15 +3550,20 @@ with tabs[3]:
 
         **Pile cap base force summary**
 
-        The pile cap summary in the Results tab uses all bearings and transfers their loads to the base centroid of
-        the abutment/pier. It is intended as an interface force summary for a separate pile-cap model, not as a pile-cap
-        design check.
+        The pile cap summary in the Results tab uses all bearings, transfers their loads to the base centroid of
+        the abutment/pier, and adds the abutment/pier self-weight dead load. It is intended as an interface force
+        summary for a separate pile-cap model, not as a pile-cap design check.
 
-        `Pu_z point = sum(Pu_z)` at the centroid  
+        `DL_self = gamma_c x Lx x t x H`  
+        `Pu_z from DL = 1.40 x DL_self`  
+        `Pu_z point = sum(Pu_z bearings) + Pu_z from DL` at the centroid  
         `Pu_z line = Pu_z point / Lx`, where `Lx` is the abutment/pier width along x  
         `Mu_x point = Mux` at the centroid  
         `Mu_x line couple = Mu_x point / Lx`, with unit `kN-m/m`  
         `Mu_y point = Muy` at the centroid
+
+        The self-weight is assumed to act at the abutment/pier centroid, so it increases `Pu_z` only and does not
+        add `Mu_x`, `Mu_y`, or `Tz`.
 
         The `Mu_x / Lx` value is a distributed line couple along the wall length. It is theoretically usable when the
         pile-cap analysis model accepts a wall-line moment/couple input. It is not a vertical line load in `kN/m`.
