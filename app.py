@@ -3237,9 +3237,49 @@ else:
         design_error = str(exc)
 
 
-tabs = st.tabs(["Results", "Views", "Section", "Method"])
+tabs = st.tabs(["Views", "Results", "Section", "Method"])
 
 with tabs[0]:
+    view_cols = st.columns(2)
+    with view_cols[0]:
+        st.plotly_chart(
+            plan_view(
+                records,
+                width_x_mm=width_x_mm,
+                depth_y_mm=depth_y_mm,
+                pilecap_overhang_mm=pilecap_overhang_mm,
+                bearing_size_mm=bearing_size_mm,
+                selected_bearing_names=strength_display_names,
+                strip_center_x_mm=strength_strip_center_x_mm,
+                strip_width_x_mm=strength_design_width_x_mm,
+            ),
+            width="stretch",
+        )
+    with view_cols[1]:
+        st.plotly_chart(
+            front_view(
+                records,
+                width_x_mm=width_x_mm,
+                height_z_mm=height_z_mm,
+                pilecap_overhang_mm=pilecap_overhang_mm,
+                pilecap_thickness_mm=pilecap_thickness_mm,
+                bearing_size_mm=bearing_size_mm,
+            ),
+            width="stretch",
+        )
+    st.plotly_chart(
+        side_view(
+            records,
+            depth_y_mm=depth_y_mm,
+            height_z_mm=height_z_mm,
+            pilecap_overhang_mm=pilecap_overhang_mm,
+            pilecap_thickness_mm=pilecap_thickness_mm,
+            bearing_size_mm=bearing_size_mm,
+        ),
+        width="stretch",
+    )
+
+with tabs[1]:
     metric_row(resultant, check, strength_design_width_x_mm)
     st.markdown(
         '<p class="small-note">Vx and Vy are reported as fixed-base force resultants only. Shear design is intentionally outside this scope.</p>',
@@ -3340,46 +3380,6 @@ with tabs[0]:
         "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
         "Mu_y is kept as a point couple at the centroid because smearing it uniformly along x would hide the "
         "longitudinal eccentricity that creates bending about y."
-    )
-
-with tabs[1]:
-    view_cols = st.columns(2)
-    with view_cols[0]:
-        st.plotly_chart(
-            plan_view(
-                records,
-                width_x_mm=width_x_mm,
-                depth_y_mm=depth_y_mm,
-                pilecap_overhang_mm=pilecap_overhang_mm,
-                bearing_size_mm=bearing_size_mm,
-                selected_bearing_names=strength_display_names,
-                strip_center_x_mm=strength_strip_center_x_mm,
-                strip_width_x_mm=strength_design_width_x_mm,
-            ),
-            width="stretch",
-        )
-    with view_cols[1]:
-        st.plotly_chart(
-            front_view(
-                records,
-                width_x_mm=width_x_mm,
-                height_z_mm=height_z_mm,
-                pilecap_overhang_mm=pilecap_overhang_mm,
-                pilecap_thickness_mm=pilecap_thickness_mm,
-                bearing_size_mm=bearing_size_mm,
-            ),
-            width="stretch",
-        )
-    st.plotly_chart(
-        side_view(
-            records,
-            depth_y_mm=depth_y_mm,
-            height_z_mm=height_z_mm,
-            pilecap_overhang_mm=pilecap_overhang_mm,
-            pilecap_thickness_mm=pilecap_thickness_mm,
-            bearing_size_mm=bearing_size_mm,
-        ),
-        width="stretch",
     )
 
 with tabs[2]:
