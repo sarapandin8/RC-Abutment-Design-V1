@@ -2794,6 +2794,31 @@ def sync_bearing_editor(editor_key: str) -> None:
     st.session_state.bearing_table_dirty = True
 
 
+def committed_editor_table(
+    returned_table: pd.DataFrame,
+    base_table: pd.DataFrame,
+    editor_key: str,
+) -> pd.DataFrame:
+    committed = clean_bearings(pd.DataFrame(returned_table))
+    editor_state = st.session_state.get(editor_key)
+    if not isinstance(editor_state, dict):
+        return committed
+
+    edited_rows = editor_state.get("edited_rows", {})
+    if not edited_rows:
+        return committed
+
+    fallback = clean_bearings(pd.DataFrame(base_table))
+    for row_index, changes in edited_rows.items():
+        index = int(row_index)
+        if index >= len(fallback):
+            continue
+        for column, value in changes.items():
+            if column in fallback.columns:
+                fallback.at[index, column] = value
+    return clean_bearings(fallback)
+
+
 def status_html(status: str, ratio: float) -> str:
     klass = "status-ok" if status == "OK" else "status-ng"
     label = "PASS" if status == "OK" else "FAIL"
@@ -3042,6 +3067,9 @@ elif "pending_bearing_table" not in st.session_state or len(st.session_state.pen
     st.session_state.bearing_table_dirty = False
 
 editor_key = "bearing_load_editor"
+bearing_update_message = st.session_state.pop("bearing_update_message", None)
+if bearing_update_message:
+    st.success(bearing_update_message)
 
 with st.form("bearing_load_form"):
     edited_bearing_table = st.data_editor(
@@ -3064,11 +3092,16 @@ with st.form("bearing_load_form"):
     )
     update_data = st.form_submit_button("Update Data", type="primary", width="stretch")
 if update_data:
-    committed_bearing_table = clean_bearings(pd.DataFrame(edited_bearing_table))
+    committed_bearing_table = committed_editor_table(
+        edited_bearing_table,
+        st.session_state.pending_bearing_table,
+        editor_key,
+    )
     st.session_state.bearing_table = committed_bearing_table
     st.session_state.pending_bearing_table = committed_bearing_table.copy()
     st.session_state.bearing_table_dirty = False
-    st.success("Bearing load data updated. Calculations now use the latest table.")
+    st.session_state.bearing_update_message = "Bearing load data updated. Calculations now use the latest table."
+    st.rerun()
 
 bearings_df = clean_bearings(st.session_state.bearing_table)
 records = bearings_df.to_dict("records")
