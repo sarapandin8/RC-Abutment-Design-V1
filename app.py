@@ -2776,16 +2776,27 @@ st.title("RC Bridge Abutment ULS Designer")
 st.caption("Bearing load resultants, fixed-base axial + biaxial bending check, and rectangular section visuals.")
 
 with st.sidebar:
-    st.header("Project File")
+    st.markdown("### 💾 Save / Load Design")
     project_message = st.session_state.pop("project_file_message", None)
     if project_message:
         st.success(project_message)
-    uploaded_project = st.file_uploader(
-        "Project JSON file",
-        type=["json"],
-        key="project_file_upload",
-        help="Upload a JSON file previously saved from this app. It will open automatically.",
-    )
+    save_col, open_col = st.columns([1.0, 1.0])
+    with save_col:
+        st.download_button(
+            "💾 Save",
+            data=project_payload_json(),
+            file_name="rc_abutment_uls_project.json",
+            mime="application/json",
+            width="stretch",
+            key="project_save_button",
+        )
+    with open_col:
+        uploaded_project = st.file_uploader(
+            "📂 Open File",
+            type=["json"],
+            key="project_file_upload",
+            help="Upload a JSON file previously saved from this app. It will open automatically.",
+        )
     if uploaded_project is not None:
         uploaded_bytes = uploaded_project.getvalue()
         uploaded_text = uploaded_bytes.decode("utf-8")
@@ -2800,13 +2811,9 @@ with st.sidebar:
                 st.session_state.project_loaded_upload_signature = upload_signature
                 st.session_state.project_file_message = "Project file loaded."
                 st.rerun()
-    st.download_button(
-        "Save",
-        data=project_payload_json(),
-        file_name="rc_abutment_uls_project.json",
-        mime="application/json",
-        width="stretch",
-        key="project_save_button",
+    st.caption(
+        "💡 ไฟล์จะถูกบันทึกที่ Downloads folder หากต้องการเลือก folder เอง "
+        "ให้เปิด Ask where to save ในการตั้งค่า Browser"
     )
 
     st.header("Design Basis")
