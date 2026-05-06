@@ -1181,7 +1181,7 @@ def _add_dimension_line(
     if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
         return
     line_style = {"color": color, "width": DIMENSION_LINE_WIDTH}
-    projection_line_style = {"color": color, "width": DIMENSION_LINE_WIDTH, "dash": "dash"}
+    projection_line_style = {"color": color, "width": DIMENSION_LINE_WIDTH, "dash": "dot"}
     length = math.hypot(x1 - x0, y1 - y0)
     extension_overrun = min(180.0, max(56.0, length * 0.036))
     extension_start_gap = min(32.0, max(10.0, length * 0.004))
