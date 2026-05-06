@@ -1072,6 +1072,8 @@ COLORS = {
 
 DIMENSION_COLOR = "#ff0000"
 DIMENSION_TEXT_COLOR = "#00b828"
+DIMENSION_LINE_WIDTH = 0.55
+DIMENSION_TEXT_SIZE = 7.5
 LOAD_TABLE_LINE_GAP_MM = 175.0
 FRONT_VIEW_LOAD_TABLE_LINE_GAP_MM = LOAD_TABLE_LINE_GAP_MM * 1.5
 SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 325.0
@@ -1177,7 +1179,7 @@ def _add_dimension_line(
 ) -> None:
     if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
         return
-    line_style = {"color": color, "width": 1.1}
+    line_style = {"color": color, "width": DIMENSION_LINE_WIDTH}
     length = math.hypot(x1 - x0, y1 - y0)
     extension_overrun = min(90.0, max(28.0, length * 0.018))
     for source, target in ((ext0, (x0, y0)), (ext1, (x1, y1))):
@@ -1205,8 +1207,8 @@ def _add_dimension_line(
         "text": "",
         "showarrow": True,
         "arrowhead": 3,
-        "arrowsize": 1.05,
-        "arrowwidth": 1.1,
+        "arrowsize": 0.85,
+        "arrowwidth": DIMENSION_LINE_WIDTH,
         "arrowcolor": color,
     }
     fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, **arrow_style)
@@ -1228,7 +1230,7 @@ def _add_dimension_line(
         xshift=label_xshift,
         yshift=label_yshift,
         textangle=-90 if is_vertical else 0,
-        font={"color": DIMENSION_TEXT_COLOR, "size": 15},
+        font={"color": DIMENSION_TEXT_COLOR, "size": DIMENSION_TEXT_SIZE},
     )
     xs = [x0, x1]
     ys = [y0, y1]
@@ -1586,7 +1588,7 @@ def plan_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(260.0, min(width_x_mm, depth_y_mm) * 0.18, bearing_size_mm * 1.55)
+    dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_size_mm * 2.20)
     lowest_load_y = min(load_text_ys) if load_text_ys else -pile_y
     bottom_dim_y = min(-abut_y - dim_gap, lowest_load_y - dim_gap)
     _add_dimension_line(
@@ -1616,7 +1618,7 @@ def plan_view(
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
     if x_centers:
-        bearing_dim_y = max(abut_y + dim_gap * 0.75, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.55)
+        bearing_dim_y = max(abut_y + dim_gap * 1.10, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.80)
         x_chain = [-abut_x, *x_centers, abut_x]
         for left_x, right_x in zip(x_chain[:-1], x_chain[1:]):
             _add_dimension_line(
@@ -1629,7 +1631,7 @@ def plan_view(
                 text_yshift=8,
             )
     if len(y_centers) > 1:
-        row_dim_x = abut_x + dim_gap * 2.05
+        row_dim_x = abut_x + dim_gap * 2.60
         y_chain = [-abut_y, *y_centers, abut_y]
         for low_y, high_y in zip(y_chain[:-1], y_chain[1:]):
             _add_dimension_line(
@@ -1843,7 +1845,7 @@ def front_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(280.0, min(width_x_mm, height_z_mm) * 0.09, bearing_size_mm * 1.45)
+    dim_gap = max(360.0, min(width_x_mm, height_z_mm) * 0.12, bearing_size_mm * 2.00)
     bottom_dim_z = -pilecap_thickness_mm - dim_gap
     _add_dimension_line(
         fig,
@@ -1871,7 +1873,7 @@ def front_view(
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
     if x_centers:
-        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.65
+        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.90
         x_chain = [-abut_x, *x_centers, abut_x]
         for left_x, right_x in zip(x_chain[:-1], x_chain[1:]):
             _add_dimension_line(
@@ -2089,7 +2091,7 @@ def side_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(280.0, min(depth_y_mm, height_z_mm) * 0.14, bearing_size_mm * 1.45)
+    dim_gap = max(360.0, min(depth_y_mm, height_z_mm) * 0.20, bearing_size_mm * 2.00)
     bottom_dim_z = -pilecap_thickness_mm - dim_gap
     _add_dimension_line(
         fig,
@@ -2117,7 +2119,7 @@ def side_view(
 
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
     if y_centers:
-        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.65
+        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.90
         y_chain = [-abut_y, *y_centers, abut_y]
         for left_y, right_y in zip(y_chain[:-1], y_chain[1:]):
             _add_dimension_line(
