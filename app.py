@@ -237,6 +237,32 @@ def combine_bearing_loads(records: Iterable[dict]) -> BearingResultant:
     )
 
 
+def pilecap_base_force_summary_table(resultant: BearingResultant, width_x_mm: float) -> pd.DataFrame:
+    width_m = max(float(width_x_mm) / 1000.0, 1e-9)
+    return pd.DataFrame(
+        [
+            {
+                "Resultant for pile cap": "Pu_z axial compression",
+                "Point at centroid": f"{resultant.pu_kn:,.2f} kN",
+                "Linearized over x width": f"{resultant.pu_kn / width_m:,.2f} kN/m",
+                "Basis": "sum(Pu_z)",
+            },
+            {
+                "Resultant for pile cap": "Mu_x about x",
+                "Point at centroid": f"{resultant.mux_knm:,.2f} kN-m",
+                "Linearized over x width": f"{resultant.mux_knm / width_m:,.2f} kN-m/m",
+                "Basis": "sum(Mu_x + (-y Pu_z - z Pu_y) / 1000)",
+            },
+            {
+                "Resultant for pile cap": "Mu_y about y",
+                "Point at centroid": f"{resultant.muy_knm:,.2f} kN-m",
+                "Linearized over x width": "Use point couple",
+                "Basis": "sum(Mu_y + (z Pu_x + x Pu_z) / 1000)",
+            },
+        ]
+    )
+
+
 def _min_positive_spacing_mm(values: Iterable[float]) -> float:
     unique_values = sorted({round(float(value), 3) for value in values})
     spacings = [
@@ -2281,34 +2307,6 @@ def pmm_surface_plot(check: SectionCheck, mux_knm: float, muy_knm: float, pu_kn:
     return fig
 
 
-def load_vector_plot(resultant_mx: float, resultant_my: float) -> go.Figure:
-    magnitude = math.hypot(resultant_mx, resultant_my)
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=[0, resultant_my],
-            y=[0, resultant_mx],
-            mode="lines+markers",
-            line={"color": "#334155", "width": 4},
-            marker={"size": [8, 12], "color": ["#334155", "#dc2626"]},
-            hovertemplate="My=%{x:.1f} kN-m<br>Mx=%{y:.1f} kN-m<extra></extra>",
-        )
-    )
-    fig.add_annotation(x=resultant_my, y=resultant_mx, text=f"|M| = {magnitude:,.0f} kN-m", showarrow=True, arrowhead=2, ax=-25, ay=-25)
-    fig.update_layout(
-        title={"text": "Signed base moment vector", "x": 0.02, "xanchor": "left"},
-        height=340,
-        margin={"l": 24, "r": 24, "t": 54, "b": 24},
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        showlegend=False,
-        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
-    )
-    fig.update_xaxes(title="My (kN-m)", gridcolor=COLORS["grid"], zeroline=True, zerolinecolor="#111827")
-    fig.update_yaxes(title="Mx (kN-m)", gridcolor=COLORS["grid"], zeroline=True, zerolinecolor="#111827")
-    return fig
-
-
 st.set_page_config(
     page_title="RC Bridge Abutment ULS",
     page_icon=":material/account_tree:",
@@ -2866,7 +2864,23 @@ with tabs[0]:
                 f"advisory limit {check.max_spacing_advisory_mm:.0f} mm."
             )
 
-    st.plotly_chart(load_vector_plot(resultant.mux_knm, resultant.muy_knm), width="stretch")
+    st.subheader("Pile Cap Base Force Summary")
+    st.caption(
+        f"Uses all bearing loads transferred to the abutment/pier base centroid. "
+        f"Coordinate origin is the centroid used by the bearing table; x width = {width_x_mm / 1000.0:,.3f} m. "
+        "Compression Pu_z is positive, and moment signs follow the displayed axes."
+    )
+    st.dataframe(
+        pilecap_base_force_summary_table(global_resultant, width_x_mm),
+        width="stretch",
+        hide_index=True,
+    )
+    st.info(
+        "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
+        "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
+        "Mu_y is kept as a point couple at the centroid because smearing it uniformly along x would hide the "
+        "longitudinal eccentricity that creates bending about y."
+    )
 
 with tabs[1]:
     view_cols = st.columns(2)
@@ -2957,6 +2971,25 @@ with tabs[3]:
         `Mux = sum(Mu_x + (-y Pu_z - z Pu_y) / 1000)`  
         `Muy = sum(Mu_y + (z Pu_x + x Pu_z) / 1000)`  
         `Tz = sum((x Pu_y - y Pu_x) / 1000)`
+
+        **Pile cap base force summary**
+
+        The pile cap summary in the Results tab uses all bearings and transfers their loads to the base centroid of
+        the abutment/pier. It is intended as an interface force summary for a separate pile-cap model, not as a pile-cap
+        design check.
+
+        `Pu_z point = sum(Pu_z)` at the centroid  
+        `Pu_z line = Pu_z point / Lx`, where `Lx` is the abutment/pier width along x  
+        `Mu_x point = Mux` at the centroid  
+        `Mu_x line couple = Mu_x point / Lx`, with unit `kN-m/m`  
+        `Mu_y point = Muy` at the centroid
+
+        The `Mu_x / Lx` value is a distributed line couple along the wall length. It is theoretically usable when the
+        pile-cap analysis model accepts a wall-line moment/couple input. It is not a vertical line load in `kN/m`.
+        If the pile-cap model only accepts vertical loads, convert `Mu_x` into an equivalent compression/tension pair
+        across the y-direction using the lever arm adopted in that model. `Mu_y` is kept as a point couple because it
+        represents longitudinal eccentricity about the y-axis; smearing it uniformly along x can hide the bending
+        distribution that the pile-cap model should resolve.
 
         **Effective design strip for Pn / PMM strength**
 
