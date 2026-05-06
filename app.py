@@ -1182,7 +1182,10 @@ def _add_dimension_line(
         return
     line_style = {"color": color, "width": DIMENSION_LINE_WIDTH}
     length = math.hypot(x1 - x0, y1 - y0)
-    extension_overrun = min(90.0, max(28.0, length * 0.018))
+    extension_overrun = min(45.0, max(14.0, length * 0.009))
+    extension_start_gap = min(32.0, max(10.0, length * 0.004))
+    extension_tail = min(260.0, max(95.0, length * 0.045))
+    extension_edge_tick = min(105.0, max(42.0, length * 0.012))
     for source, target in ((ext0, (x0, y0)), (ext1, (x1, y1))):
         if source is None:
             continue
@@ -1190,16 +1193,29 @@ def _add_dimension_line(
         if extension_length > 1e-9:
             ux = (target[0] - source[0]) / extension_length
             uy = (target[1] - source[1]) / extension_length
-            target = (target[0] + ux * extension_overrun, target[1] + uy * extension_overrun)
-        fig.add_shape(
-            type="line",
-            layer="above",
-            x0=source[0],
-            y0=source[1],
-            x1=target[0],
-            y1=target[1],
-            line=line_style,
-        )
+            edge_start = (source[0] + ux * extension_start_gap, source[1] + uy * extension_start_gap)
+            edge_end = (
+                source[0] + ux * min(extension_start_gap + extension_edge_tick, extension_length),
+                source[1] + uy * min(extension_start_gap + extension_edge_tick, extension_length),
+            )
+            tail_start_distance = min(extension_length, max(extension_start_gap, extension_length - extension_tail))
+            tail_start = (source[0] + ux * tail_start_distance, source[1] + uy * tail_start_distance)
+            tail_end = (target[0] + ux * extension_overrun, target[1] + uy * extension_overrun)
+            segments = [(tail_start, tail_end)]
+            if extension_length > extension_tail + extension_edge_tick + extension_start_gap:
+                segments.insert(0, (edge_start, edge_end))
+        else:
+            segments = [(source, target)]
+        for segment_start, segment_end in segments:
+            fig.add_shape(
+                type="line",
+                layer="above",
+                x0=segment_start[0],
+                y0=segment_start[1],
+                x1=segment_end[0],
+                y1=segment_end[1],
+                line=line_style,
+            )
     arrow_style = {
         "xref": "x",
         "yref": "y",
