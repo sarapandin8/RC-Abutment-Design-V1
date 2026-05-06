@@ -2738,6 +2738,8 @@ def apply_project_payload(payload: dict) -> None:
     bearing_table = payload.get("bearing_table")
     if bearing_table is not None:
         st.session_state.bearing_table = clean_bearings(pd.DataFrame(bearing_table))
+        st.session_state.pending_bearing_table = st.session_state.bearing_table.copy()
+        st.session_state.bearing_table_dirty = False
 
     st.session_state.pop("bearing_load_editor", None)
 
@@ -2746,7 +2748,9 @@ def sync_bearing_editor(editor_key: str) -> None:
     editor_state = st.session_state.get(editor_key)
     if not isinstance(editor_state, dict):
         return
-    base_table = st.session_state.get("bearing_table")
+    base_table = st.session_state.get("pending_bearing_table")
+    if base_table is None:
+        base_table = st.session_state.get("bearing_table")
     if base_table is None:
         return
 
@@ -2758,7 +2762,8 @@ def sync_bearing_editor(editor_key: str) -> None:
         for column, value in changes.items():
             if column in updated.columns:
                 updated.at[index, column] = value
-    st.session_state.bearing_table = clean_bearings(updated)
+    st.session_state.pending_bearing_table = clean_bearings(updated)
+    st.session_state.bearing_table_dirty = True
 
 
 def status_html(status: str, ratio: float) -> str:
@@ -2981,28 +2986,37 @@ with load_cols[3]:
 expected_bearing_count = int(bearing_rows) * int(bearings_per_row)
 
 if "bearing_table" not in st.session_state or reset_table:
-    st.session_state.bearing_table = default_bearings(
+    default_table = default_bearings(
         int(bearings_per_row),
         int(bearing_rows),
         width_x_mm,
         height_z_mm,
         row_spacing_y_mm,
     )
+    st.session_state.bearing_table = default_table
+    st.session_state.pending_bearing_table = default_table.copy()
+    st.session_state.bearing_table_dirty = False
     st.session_state.pop("bearing_load_editor", None)
 elif len(st.session_state.bearing_table) != expected_bearing_count:
-    st.session_state.bearing_table = default_bearings(
+    default_table = default_bearings(
         int(bearings_per_row),
         int(bearing_rows),
         width_x_mm,
         height_z_mm,
         row_spacing_y_mm,
     )
+    st.session_state.bearing_table = default_table
+    st.session_state.pending_bearing_table = default_table.copy()
+    st.session_state.bearing_table_dirty = False
     st.session_state.pop("bearing_load_editor", None)
+elif "pending_bearing_table" not in st.session_state or len(st.session_state.pending_bearing_table) != expected_bearing_count:
+    st.session_state.pending_bearing_table = clean_bearings(st.session_state.bearing_table).copy()
+    st.session_state.bearing_table_dirty = False
 
 editor_key = "bearing_load_editor"
 
-edited = st.data_editor(
-    st.session_state.bearing_table,
+edited_bearing_table = st.data_editor(
+    st.session_state.pending_bearing_table,
     key=editor_key,
     on_change=sync_bearing_editor,
     args=(editor_key,),
@@ -3021,6 +3035,16 @@ edited = st.data_editor(
         "Mu_y_kNm": st.column_config.NumberColumn("Mu_y (kN-m)", step=10.0, format="%.1f"),
     },
 )
+update_data = st.button("Update Data", type="primary", width="stretch", key="update_bearing_data_button")
+if update_data:
+    committed_bearing_table = clean_bearings(pd.DataFrame(edited_bearing_table))
+    st.session_state.bearing_table = committed_bearing_table
+    st.session_state.pending_bearing_table = committed_bearing_table.copy()
+    st.session_state.bearing_table_dirty = False
+    st.success("Bearing load data updated. Calculations now use the latest table.")
+elif st.session_state.get("bearing_table_dirty", False):
+    st.warning("Bearing load edits are pending. Click Update Data before calculation.")
+
 bearings_df = clean_bearings(st.session_state.bearing_table)
 records = bearings_df.to_dict("records")
 global_resultant = combine_bearing_loads(records)
@@ -3131,54 +3155,58 @@ if resultant.pu_kn < 0:
 
 check = None
 design_error = None
-try:
-    if mode == "Auto design":
-        if not dia_options:
-            design_error = "Select at least one bar diameter for auto design."
+bearing_data_pending = st.session_state.get("bearing_table_dirty", False)
+if bearing_data_pending:
+    design_error = "Bearing load edits are pending. Click Update Data to run calculations with the latest table."
+else:
+    try:
+        if mode == "Auto design":
+            if not dia_options:
+                design_error = "Select at least one bar diameter for auto design."
+            else:
+                with st.spinner("Searching reinforcement layout..."):
+                    check = find_reinforcement(
+                        width_x_mm=strength_design_width_x_mm,
+                        depth_y_mm=depth_y_mm,
+                        cover_mm=cover_mm,
+                        bar_dia_options_mm=tuple(dia_options),
+                        fc_mpa=fc_mpa,
+                        es_mpa=es_mpa,
+                        pu_kn=resultant.pu_kn,
+                        mux_knm=resultant.mux_knm,
+                        muy_knm=resultant.muy_knm,
+                        params=params,
+                        rho_min_percent=rho_min_percent,
+                        rho_max_percent=rho_max_percent,
+                        biaxial_method=biaxial_method,
+                        load_contour_alpha=load_contour_alpha,
+                        min_clear_spacing_mm=min_clear_spacing_mm,
+                        max_spacing_advisory_mm=max_spacing_advisory_mm,
+                        enforce_max_spacing=enforce_max_spacing,
+                    )
+                if check is None:
+                    design_error = "No reinforcement layout passed within the selected auto limits."
         else:
-            with st.spinner("Searching reinforcement layout..."):
-                check = find_reinforcement(
-                    width_x_mm=strength_design_width_x_mm,
-                    depth_y_mm=depth_y_mm,
-                    cover_mm=cover_mm,
-                    bar_dia_options_mm=tuple(dia_options),
-                    fc_mpa=fc_mpa,
-                    es_mpa=es_mpa,
-                    pu_kn=resultant.pu_kn,
-                    mux_knm=resultant.mux_knm,
-                    muy_knm=resultant.muy_knm,
-                    params=params,
-                    rho_min_percent=rho_min_percent,
-                    rho_max_percent=rho_max_percent,
-                    biaxial_method=biaxial_method,
-                    load_contour_alpha=load_contour_alpha,
-                    min_clear_spacing_mm=min_clear_spacing_mm,
-                    max_spacing_advisory_mm=max_spacing_advisory_mm,
-                    enforce_max_spacing=enforce_max_spacing,
-                )
-            if check is None:
-                design_error = "No reinforcement layout passed within the selected auto limits."
-    else:
-        check = analyze_section(
-            width_x_mm=strength_design_width_x_mm,
-            depth_y_mm=depth_y_mm,
-            cover_mm=cover_mm,
-            bar_dia_mm=float(bar_dia_mm),
-            bars_x_face=int(bars_x_face),
-            bars_y_face=int(bars_y_face),
-            fc_mpa=fc_mpa,
-            fy_mpa=selected_fy_mpa,
-            es_mpa=es_mpa,
-            pu_kn=resultant.pu_kn,
-            mux_knm=resultant.mux_knm,
-            muy_knm=resultant.muy_knm,
-            params=params,
-            biaxial_method=biaxial_method,
-            load_contour_alpha=load_contour_alpha,
-            max_spacing_advisory_mm=max_spacing_advisory_mm,
-        )
-except Exception as exc:  # noqa: BLE001
-    design_error = str(exc)
+            check = analyze_section(
+                width_x_mm=strength_design_width_x_mm,
+                depth_y_mm=depth_y_mm,
+                cover_mm=cover_mm,
+                bar_dia_mm=float(bar_dia_mm),
+                bars_x_face=int(bars_x_face),
+                bars_y_face=int(bars_y_face),
+                fc_mpa=fc_mpa,
+                fy_mpa=selected_fy_mpa,
+                es_mpa=es_mpa,
+                pu_kn=resultant.pu_kn,
+                mux_knm=resultant.mux_knm,
+                muy_knm=resultant.muy_knm,
+                params=params,
+                biaxial_method=biaxial_method,
+                load_contour_alpha=load_contour_alpha,
+                max_spacing_advisory_mm=max_spacing_advisory_mm,
+            )
+    except Exception as exc:  # noqa: BLE001
+        design_error = str(exc)
 
 
 tabs = st.tabs(["Results", "Views", "Section", "Method"])
