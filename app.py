@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 import math
 from typing import Iterable, Literal
 
@@ -2644,6 +2645,84 @@ def clean_bearings(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+PROJECT_FILE_VERSION = 1
+PROJECT_SETTING_DEFAULTS = {
+    "code_choice": "ACI 318 style",
+    "fc_mpa": 35.0,
+    "es_mpa": 200000.0,
+    "phi_compression": 0.65,
+    "phi_flexure": 0.90,
+    "axial_cap_factor": 0.80,
+    "eps_cu": 0.0030,
+    "biaxial_method": "Load contour",
+    "load_contour_alpha": 1.50,
+    "width_x_mm": 9000.0,
+    "depth_y_mm": 1200.0,
+    "height_z_mm": 4500.0,
+    "bearing_size_mm": 250.0,
+    "pilecap_overhang_mm": 500.0,
+    "pilecap_thickness_mm": 1500.0,
+    "cover_mm": 75.0,
+    "min_clear_spacing_mm": 100.0,
+    "max_spacing_advisory_mm": 450.0,
+    "enforce_max_spacing": True,
+    "mode": "Auto design",
+    "rho_min_percent": 0.25,
+    "rho_max_percent": 4.00,
+    "bar_dia_mm": 25.0,
+    "bars_x_face": 12,
+    "bars_y_face": 3,
+    "dia_options": [20.0, 25.0, 28.0, 32.0],
+    "bearing_rows": 1,
+    "bearings_per_row": 4,
+    "row_spacing_y_mm": 600.0,
+    "strip_width_mode": "Auto effective strip",
+    "manual_strip_width_mm": None,
+    "strength_bearing_names": [],
+}
+
+
+def _session_project_value(key: str):
+    return st.session_state.get(key, PROJECT_SETTING_DEFAULTS[key])
+
+
+def project_payload_json() -> str:
+    settings = {key: _session_project_value(key) for key in PROJECT_SETTING_DEFAULTS}
+    bearing_rows = int(settings["bearing_rows"])
+    bearings_per_row = int(settings["bearings_per_row"])
+    width_x = float(settings["width_x_mm"])
+    height_z = float(settings["height_z_mm"])
+    row_spacing = float(settings["row_spacing_y_mm"])
+    default_table = default_bearings(bearings_per_row, bearing_rows, width_x, height_z, row_spacing)
+    bearing_table = clean_bearings(pd.DataFrame(st.session_state.get("bearing_table", default_table)))
+    payload = {
+        "app": "RC Bridge Abutment ULS Designer",
+        "version": PROJECT_FILE_VERSION,
+        "settings": settings,
+        "bearing_table": bearing_table.to_dict("records"),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def apply_project_payload(payload: dict) -> None:
+    settings = payload.get("settings", {})
+    if not isinstance(settings, dict):
+        raise ValueError("Project file is missing the settings object.")
+
+    for key in PROJECT_SETTING_DEFAULTS:
+        if key in settings:
+            if key == "manual_strip_width_mm" and settings[key] is None:
+                st.session_state.pop(key, None)
+                continue
+            st.session_state[key] = settings[key]
+
+    bearing_table = payload.get("bearing_table")
+    if bearing_table is not None:
+        st.session_state.bearing_table = clean_bearings(pd.DataFrame(bearing_table))
+
+    st.session_state.pop("bearing_load_editor", None)
+
+
 def sync_bearing_editor(editor_key: str) -> None:
     editor_state = st.session_state.get(editor_key)
     if not isinstance(editor_state, dict):
@@ -2697,16 +2776,51 @@ st.title("RC Bridge Abutment ULS Designer")
 st.caption("Bearing load resultants, fixed-base axial + biaxial bending check, and rectangular section visuals.")
 
 with st.sidebar:
+    st.header("Project File")
+    project_message = st.session_state.pop("project_file_message", None)
+    if project_message:
+        st.success(project_message)
+    uploaded_project = st.file_uploader(
+        "Project JSON file",
+        type=["json"],
+        key="project_file_upload",
+        help="Open a JSON file previously saved from this app.",
+    )
+    project_cols = st.columns(2)
+    with project_cols[0]:
+        st.download_button(
+            "Save",
+            data=project_payload_json(),
+            file_name="rc_abutment_uls_project.json",
+            mime="application/json",
+            width="stretch",
+            key="project_save_button",
+        )
+    with project_cols[1]:
+        if st.button("Open File", width="stretch", key="project_open_button"):
+            if uploaded_project is None:
+                st.warning("Choose a saved project JSON file first.")
+            else:
+                try:
+                    payload = json.loads(uploaded_project.getvalue().decode("utf-8"))
+                    apply_project_payload(payload)
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Could not open project file: {exc}")
+                else:
+                    st.session_state.project_file_message = "Project file loaded."
+                    st.rerun()
+
     st.header("Design Basis")
     code_choice = st.selectbox(
         "Code assumptions",
         ["ACI 318 style", "AASHTO LRFD style"],
+        key="code_choice",
         help="Resistance-factor defaults are editable below. Always verify against the governing project code edition.",
     )
     base_params = default_code_parameters(code_choice)
 
-    fc_mpa = st.number_input("f'c (MPa)", min_value=15.0, max_value=100.0, value=35.0, step=1.0)
-    es_mpa = st.number_input("Es (MPa)", min_value=180000.0, max_value=220000.0, value=200000.0, step=5000.0)
+    fc_mpa = st.number_input("f'c (MPa)", min_value=15.0, max_value=100.0, value=35.0, step=1.0, key="fc_mpa")
+    es_mpa = st.number_input("Es (MPa)", min_value=180000.0, max_value=220000.0, value=200000.0, step=5000.0, key="es_mpa")
     st.caption("Rebar fy is assigned automatically: DB12/16/20/25/28 = 390 MPa, DB32 = 490 MPa.")
 
     with st.expander("Resistance factor settings", expanded=False):
@@ -2716,6 +2830,7 @@ with st.sidebar:
             max_value=0.95,
             value=float(base_params.phi_compression),
             step=0.01,
+            key="phi_compression",
         )
         phi_flexure = st.number_input(
             "phi flexure / tension",
@@ -2723,6 +2838,7 @@ with st.sidebar:
             max_value=0.95,
             value=float(base_params.phi_flexure),
             step=0.01,
+            key="phi_flexure",
         )
         axial_cap_factor = st.number_input(
             "axial cap factor",
@@ -2730,8 +2846,17 @@ with st.sidebar:
             max_value=1.00,
             value=float(base_params.axial_cap_factor),
             step=0.01,
+            key="axial_cap_factor",
         )
-        eps_cu = st.number_input("concrete ultimate strain", min_value=0.0020, max_value=0.0040, value=0.0030, step=0.0001, format="%.4f")
+        eps_cu = st.number_input(
+            "concrete ultimate strain",
+            min_value=0.0020,
+            max_value=0.0040,
+            value=0.0030,
+            step=0.0001,
+            format="%.4f",
+            key="eps_cu",
+        )
 
     params = replace(
         base_params,
@@ -2741,7 +2866,7 @@ with st.sidebar:
         eps_cu=eps_cu,
     )
 
-    biaxial_method = st.radio("Biaxial check method", BIAXIAL_METHODS, horizontal=True)
+    biaxial_method = st.radio("Biaxial check method", BIAXIAL_METHODS, horizontal=True, key="biaxial_method")
     load_contour_alpha = st.number_input(
         "load contour alpha",
         min_value=1.00,
@@ -2749,6 +2874,7 @@ with st.sidebar:
         value=1.50,
         step=0.05,
         disabled=biaxial_method != "Load contour",
+        key="load_contour_alpha",
         help="alpha=1.0 equals the conservative linear interaction. Larger alpha gives a rounded load contour.",
     )
     with st.expander("Alpha guidance and code reference", expanded=False):
@@ -2760,16 +2886,16 @@ with st.sidebar:
         )
 
     st.header("Geometry")
-    width_x_mm = st.number_input("Abutment width along x (mm)", min_value=800.0, value=9000.0, step=100.0)
-    depth_y_mm = st.number_input("Abutment thickness along y (mm)", min_value=300.0, value=1200.0, step=50.0)
-    height_z_mm = st.number_input("Bearing level height z (mm)", min_value=500.0, value=4500.0, step=100.0)
-    bearing_size_mm = st.number_input("Bearing plan size (mm)", min_value=100.0, value=250.0, step=25.0)
-    pilecap_overhang_mm = st.number_input("Pile cap overhang each side (mm)", min_value=0.0, value=500.0, step=50.0)
-    pilecap_thickness_mm = st.number_input("Pile cap display thickness (mm)", min_value=300.0, value=1500.0, step=100.0)
+    width_x_mm = st.number_input("Abutment width along x (mm)", min_value=800.0, value=9000.0, step=100.0, key="width_x_mm")
+    depth_y_mm = st.number_input("Abutment thickness along y (mm)", min_value=300.0, value=1200.0, step=50.0, key="depth_y_mm")
+    height_z_mm = st.number_input("Bearing level height z (mm)", min_value=500.0, value=4500.0, step=100.0, key="height_z_mm")
+    bearing_size_mm = st.number_input("Bearing plan size (mm)", min_value=100.0, value=250.0, step=25.0, key="bearing_size_mm")
+    pilecap_overhang_mm = st.number_input("Pile cap overhang each side (mm)", min_value=0.0, value=500.0, step=50.0, key="pilecap_overhang_mm")
+    pilecap_thickness_mm = st.number_input("Pile cap display thickness (mm)", min_value=300.0, value=1500.0, step=100.0, key="pilecap_thickness_mm")
 
     st.header("Reinforcement")
-    cover_mm = st.number_input("Clear cover to tie / outer bar (mm)", min_value=25.0, value=75.0, step=5.0)
-    min_clear_spacing_mm = st.number_input("minimum clear bar spacing (mm)", min_value=25.0, value=100.0, step=25.0)
+    cover_mm = st.number_input("Clear cover to tie / outer bar (mm)", min_value=25.0, value=75.0, step=5.0, key="cover_mm")
+    min_clear_spacing_mm = st.number_input("minimum clear bar spacing (mm)", min_value=25.0, value=100.0, step=25.0, key="min_clear_spacing_mm")
     default_max_spacing_mm = min(3.0 * depth_y_mm, 450.0)
     max_spacing_advisory_mm = st.number_input(
         "max bar spacing advisory, c/c (mm)",
@@ -2777,28 +2903,31 @@ with st.sidebar:
         max_value=2000.0,
         value=float(default_max_spacing_mm),
         step=25.0,
+        key="max_spacing_advisory_mm",
         help="Advisory default for wall/abutment-style distributed reinforcement: min(3t, 450 mm). Verify with the governing code edition and project specification.",
     )
-    enforce_max_spacing = st.checkbox("enforce max spacing in auto design", value=True)
-    mode = st.radio("Reinforcement mode", ["Auto design", "Manual check"], horizontal=True)
-    rho_min_percent = st.number_input("minimum rho for auto (%)", min_value=0.0, max_value=5.0, value=0.25, step=0.05)
-    rho_max_percent = st.number_input("maximum rho for auto (%)", min_value=0.1, max_value=10.0, value=4.00, step=0.10)
+    enforce_max_spacing = st.checkbox("enforce max spacing in auto design", value=True, key="enforce_max_spacing")
+    mode = st.radio("Reinforcement mode", ["Auto design", "Manual check"], horizontal=True, key="mode")
+    rho_min_percent = st.number_input("minimum rho for auto (%)", min_value=0.0, max_value=5.0, value=0.25, step=0.05, key="rho_min_percent")
+    rho_max_percent = st.number_input("maximum rho for auto (%)", min_value=0.1, max_value=10.0, value=4.00, step=0.10, key="rho_max_percent")
 
     if mode == "Manual check":
         bar_dia_mm = st.selectbox(
             "bar diameter",
             REBAR_DIAMETERS_MM,
             index=3,
+            key="bar_dia_mm",
             format_func=lambda dia: f"{rebar_label(dia)}  fy={rebar_fy_mpa(dia):.0f} MPa",
         )
         selected_fy_mpa = rebar_fy_mpa(float(bar_dia_mm))
-        bars_x_face = st.number_input("bars along x on top/bottom faces", min_value=2, max_value=40, value=12, step=1)
-        bars_y_face = st.number_input("bars along y on left/right faces", min_value=2, max_value=24, value=3, step=1)
+        bars_x_face = st.number_input("bars along x on top/bottom faces", min_value=2, max_value=40, value=12, step=1, key="bars_x_face")
+        bars_y_face = st.number_input("bars along y on left/right faces", min_value=2, max_value=24, value=3, step=1, key="bars_y_face")
     else:
         dia_options = st.multiselect(
             "auto bar diameters",
             REBAR_DIAMETERS_MM,
             default=[20.0, 25.0, 28.0, 32.0],
+            key="dia_options",
             format_func=lambda dia: f"{rebar_label(dia)}  fy={rebar_fy_mpa(dia):.0f} MPa",
         )
 
@@ -2806,10 +2935,12 @@ with st.sidebar:
 st.subheader("Bearing Loads")
 load_cols = st.columns([1, 1, 1, 1])
 with load_cols[0]:
-    bearing_rows = st.radio("Bearing rows", [1, 2], horizontal=True)
+    bearing_rows = st.radio("Bearing rows", [1, 2], horizontal=True, key="bearing_rows")
 with load_cols[1]:
-    bearings_per_row = st.number_input("Bearings per row", min_value=1, max_value=20, value=4, step=1)
+    bearings_per_row = st.number_input("Bearings per row", min_value=1, max_value=20, value=4, step=1, key="bearings_per_row")
 with load_cols[2]:
+    if "row_spacing_y_mm" in st.session_state:
+        st.session_state.row_spacing_y_mm = min(float(st.session_state.row_spacing_y_mm), float(depth_y_mm))
     row_spacing_y_mm = st.number_input(
         "Row spacing y (mm)",
         min_value=0.0,
@@ -2817,9 +2948,10 @@ with load_cols[2]:
         value=min(600.0, float(depth_y_mm)),
         step=50.0,
         disabled=int(bearing_rows) == 1,
+        key="row_spacing_y_mm",
     )
 with load_cols[3]:
-    reset_table = st.button("Reset layout", width="stretch")
+    reset_table = st.button("Reset layout", width="stretch", key="reset_layout_button")
 
 expected_bearing_count = int(bearing_rows) * int(bearings_per_row)
 
@@ -2883,6 +3015,7 @@ with strip_cols[0]:
         "Strength section width",
         ["Auto effective strip", "Manual strip width", "Full abutment width"],
         horizontal=False,
+        key="strip_width_mode",
         help="Use an effective strip for local bearing checks. Full width is mainly for global wall-line checks.",
     )
 with strip_cols[1]:
@@ -2914,12 +3047,22 @@ if strip_width_mode == "Full abutment width":
     strength_display_names = bearing_names
 elif strip_width_mode == "Manual strip width":
     with strip_cols[2]:
+        manual_strip_min = max(100.0, bearing_size_mm)
+        manual_strip_default = float(min(width_x_mm, max(auto_strip_width_x_mm, bearing_size_mm)))
+        if st.session_state.get("manual_strip_width_mm") is None:
+            st.session_state.pop("manual_strip_width_mm", None)
+        elif "manual_strip_width_mm" in st.session_state:
+            st.session_state.manual_strip_width_mm = min(
+                float(width_x_mm),
+                max(manual_strip_min, float(st.session_state.manual_strip_width_mm)),
+            )
         strength_design_width_x_mm = st.number_input(
             "manual strip width (mm)",
-            min_value=max(100.0, bearing_size_mm),
+            min_value=manual_strip_min,
             max_value=float(width_x_mm),
-            value=float(min(width_x_mm, max(auto_strip_width_x_mm, bearing_size_mm))),
+            value=manual_strip_default,
             step=50.0,
+            key="manual_strip_width_mm",
             help="Use this when the project specification defines another effective width.",
         )
     strength_strip_center_x_mm = strip_center_x_mm(selected_strength_records)
