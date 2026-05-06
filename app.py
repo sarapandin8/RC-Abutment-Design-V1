@@ -1590,7 +1590,9 @@ def plan_view(
                 )
 
     dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_size_mm * 2.20)
-    right_dim_x = abut_x + dim_gap * 1.65
+    x_centers = _unique_sorted_positions(bearing_records, "x_mm")
+    y_centers = _unique_sorted_positions(bearing_records, "y_mm")
+    right_dim_x = abut_x + dim_gap * (2.60 if len(y_centers) > 1 else 1.65)
     _add_dimension_line(
         fig,
         x0=right_dim_x,
@@ -1600,11 +1602,9 @@ def plan_view(
         text=_format_mm(depth_y_mm, "Abutment t"),
         ext0=(abut_x, -abut_y),
         ext1=(abut_x, abut_y),
-        text_xshift=-18,
+        text_xshift=18 if len(y_centers) > 1 else -18,
     )
 
-    x_centers = _unique_sorted_positions(bearing_records, "x_mm")
-    y_centers = _unique_sorted_positions(bearing_records, "y_mm")
     bearing_dim_y = max(abut_y + dim_gap * 1.10, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.80)
     if x_centers:
         x_chain = [-abut_x, *x_centers, abut_x]
@@ -1633,7 +1633,7 @@ def plan_view(
         text_yshift=8,
     )
     if len(y_centers) > 1:
-        row_dim_x = abut_x + dim_gap * 2.60
+        row_dim_x = abut_x + dim_gap * 1.65
         y_chain = [-abut_y, *y_centers, abut_y]
         for low_y, high_y in zip(y_chain[:-1], y_chain[1:]):
             _add_dimension_line(
@@ -1643,6 +1643,8 @@ def plan_view(
                 x1=row_dim_x,
                 y1=high_y,
                 text=_format_mm(high_y - low_y),
+                ext0=(abut_x, low_y),
+                ext1=(abut_x, high_y),
                 text_xshift=-18,
             )
 
