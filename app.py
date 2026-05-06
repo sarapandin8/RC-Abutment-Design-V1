@@ -1235,9 +1235,9 @@ def _add_dimension_line(
     label_xshift = text_xshift
     label_yshift = text_yshift
     if is_vertical and label_xshift == 0:
-        label_xshift = -18
+        label_xshift = -7
     if not is_vertical and label_yshift == 0:
-        label_yshift = 15
+        label_yshift = 6
     fig.add_annotation(
         x=(x0 + x1) / 2.0,
         y=(y0 + y1) / 2.0,
@@ -1619,7 +1619,7 @@ def plan_view(
         text=_format_mm(depth_y_mm, "Abutment t"),
         ext0=(abut_x, -abut_y),
         ext1=(abut_x, abut_y),
-        text_xshift=18 if len(y_centers) > 1 else -18,
+        text_xshift=7 if len(y_centers) > 1 else -7,
     )
 
     bearing_dim_y = max(abut_y + dim_gap * 1.10, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.80)
@@ -1635,7 +1635,7 @@ def plan_view(
                 text=_format_mm(right_x - left_x),
                 ext0=(left_x, abut_y),
                 ext1=(right_x, abut_y),
-                text_yshift=8,
+                text_yshift=4,
             )
     abutment_dim_y = bearing_dim_y + dim_gap * 0.58
     _add_dimension_line(
@@ -1647,7 +1647,7 @@ def plan_view(
         text=_format_mm(width_x_mm, "Abutment"),
         ext0=(-abut_x, abut_y),
         ext1=(abut_x, abut_y),
-        text_yshift=8,
+        text_yshift=4,
     )
     if len(y_centers) > 1:
         row_dim_x = abut_x + dim_gap * 1.65
@@ -1662,7 +1662,7 @@ def plan_view(
                 text=_format_mm(high_y - low_y),
                 ext0=(abut_x, low_y),
                 ext1=(abut_x, high_y),
-                text_xshift=-18,
+                text_xshift=-7,
             )
 
     axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
@@ -1877,7 +1877,7 @@ def front_view(
         text=_format_mm(height_z_mm, "Height"),
         ext0=(abut_x, 0.0),
         ext1=(abut_x, height_z_mm),
-        text_xshift=-18,
+        text_xshift=-7,
     )
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
@@ -1894,7 +1894,7 @@ def front_view(
                 text=_format_mm(right_x - left_x),
                 ext0=(left_x, height_z_mm),
                 ext1=(right_x, height_z_mm),
-                text_yshift=8,
+                text_yshift=4,
             )
     abutment_dim_z = bearing_dim_z + dim_gap * 1.15
     _add_dimension_line(
@@ -1906,7 +1906,7 @@ def front_view(
         text=_format_mm(width_x_mm, "Abutment"),
         ext0=(-abut_x, height_z_mm),
         ext1=(abut_x, height_z_mm),
-        text_yshift=8,
+        text_yshift=4,
     )
 
     axis_gap = max(950.0, max(width_x_mm, height_z_mm) * 0.15)
@@ -2125,7 +2125,7 @@ def side_view(
         text=_format_mm(height_z_mm, "Height"),
         ext0=(abut_y, 0.0),
         ext1=(abut_y, height_z_mm),
-        text_xshift=-18,
+        text_xshift=-7,
     )
 
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
@@ -2142,7 +2142,7 @@ def side_view(
                 text=_format_mm(right_y - left_y),
                 ext0=(left_y, height_z_mm),
                 ext1=(right_y, height_z_mm),
-                text_yshift=8,
+                text_yshift=4,
             )
     abutment_dim_z = bearing_dim_z + dim_gap * 1.15
     _add_dimension_line(
@@ -2154,7 +2154,7 @@ def side_view(
         text=_format_mm(depth_y_mm, "Abutment t"),
         ext0=(-abut_y, height_z_mm),
         ext1=(abut_y, height_z_mm),
-        text_yshift=8,
+        text_yshift=4,
     )
 
     axis_gap = max(950.0, max(depth_y_mm, height_z_mm) * 0.15)
