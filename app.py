@@ -1181,11 +1181,12 @@ def _add_dimension_line(
     if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
         return
     line_style = {"color": color, "width": DIMENSION_LINE_WIDTH}
+    projection_line_style = {"color": color, "width": DIMENSION_LINE_WIDTH, "dash": "dash"}
     length = math.hypot(x1 - x0, y1 - y0)
-    extension_overrun = min(45.0, max(14.0, length * 0.009))
+    extension_overrun = min(180.0, max(56.0, length * 0.036))
     extension_start_gap = min(32.0, max(10.0, length * 0.004))
-    extension_tail = min(260.0, max(95.0, length * 0.045))
-    extension_edge_tick = min(105.0, max(42.0, length * 0.012))
+    extension_tail = min(1040.0, max(380.0, length * 0.180))
+    extension_edge_tick = min(420.0, max(168.0, length * 0.048))
     for source, target in ((ext0, (x0, y0)), (ext1, (x1, y1))):
         if source is None:
             continue
@@ -1214,7 +1215,7 @@ def _add_dimension_line(
                 y0=segment_start[1],
                 x1=segment_end[0],
                 y1=segment_end[1],
-                line=line_style,
+                line=projection_line_style,
             )
     arrow_style = {
         "xref": "x",
