@@ -1070,7 +1070,7 @@ COLORS = {
     "grid": "#e5e7eb",
 }
 
-DIMENSION_COLOR = "#475569"
+DIMENSION_COLOR = "#94a3b8"
 LOAD_TABLE_LINE_GAP_MM = 175.0
 FRONT_VIEW_LOAD_TABLE_LINE_GAP_MM = LOAD_TABLE_LINE_GAP_MM * 1.5
 SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 325.0
@@ -1177,7 +1177,7 @@ def _add_dimension_line(
 ) -> None:
     if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
         return
-    line_style = {"color": color, "width": 1.0}
+    line_style = {"color": color, "width": 0.5}
     for source, target in ((ext0, (x0, y0)), (ext1, (x1, y1))):
         if source is None:
             continue
@@ -1198,8 +1198,8 @@ def _add_dimension_line(
         "text": "",
         "showarrow": True,
         "arrowhead": 3,
-        "arrowsize": 0.55,
-        "arrowwidth": 1.0,
+        "arrowsize": 0.45,
+        "arrowwidth": 0.5,
         "arrowcolor": color,
     }
     fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, **arrow_style)
@@ -1227,10 +1227,6 @@ def _add_dimension_line(
         ys.append(ext1[1])
     pad = max(40.0, math.hypot(x1 - x0, y1 - y0) * 0.015)
     _add_autorange_points(fig, min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad)
-
-
-def _unique_sorted_positions(records: Iterable[dict], key: str) -> list[float]:
-    return sorted({round(float(row.get(key, 0.0)), 3) for row in records})
 
 
 def _max_abs_component(records: Iterable[dict], keys: Iterable[str]) -> float:
@@ -1575,167 +1571,30 @@ def plan_view(
 
     dim_gap = max(260.0, min(width_x_mm, depth_y_mm) * 0.18, bearing_size_mm * 1.55)
     lowest_load_y = min(load_text_ys) if load_text_ys else -pile_y
-    bottom_dim_y = min(-pile_y - dim_gap, lowest_load_y - dim_gap)
-    _add_dimension_line(
-        fig,
-        x0=-pile_x,
-        y0=bottom_dim_y - dim_gap * 2.0,
-        x1=pile_x,
-        y1=bottom_dim_y - dim_gap * 2.0,
-        text=_format_mm(2.0 * pile_x, "Pile cap"),
-        ext0=(-pile_x, -pile_y),
-        ext1=(pile_x, -pile_y),
-    )
+    bottom_dim_y = min(-abut_y - dim_gap, lowest_load_y - dim_gap)
     _add_dimension_line(
         fig,
         x0=-abut_x,
-        y0=bottom_dim_y - dim_gap,
+        y0=bottom_dim_y,
         x1=abut_x,
-        y1=bottom_dim_y - dim_gap,
+        y1=bottom_dim_y,
         text=_format_mm(width_x_mm, "Abutment"),
         ext0=(-abut_x, -abut_y),
         ext1=(abut_x, -abut_y),
     )
-    if pilecap_overhang_mm > 1e-9:
-        _add_dimension_line(
-            fig,
-            x0=-pile_x,
-            y0=bottom_dim_y,
-            x1=-abut_x,
-            y1=bottom_dim_y,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(-pile_x, -pile_y),
-            ext1=(-abut_x, -abut_y),
-        )
-        _add_dimension_line(
-            fig,
-            x0=abut_x,
-            y0=bottom_dim_y,
-            x1=pile_x,
-            y1=bottom_dim_y,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(abut_x, -abut_y),
-            ext1=(pile_x, -pile_y),
-        )
 
-    right_dim_x = pile_x + dim_gap
+    right_dim_x = abut_x + dim_gap
     _add_dimension_line(
         fig,
-        x0=right_dim_x + dim_gap * 2.0,
-        y0=-pile_y,
-        x1=right_dim_x + dim_gap * 2.0,
-        y1=pile_y,
-        text=_format_mm(2.0 * pile_y, "Pile cap"),
-        ext0=(pile_x, -pile_y),
-        ext1=(pile_x, pile_y),
-        text_xshift=20,
-    )
-    _add_dimension_line(
-        fig,
-        x0=right_dim_x + dim_gap,
+        x0=right_dim_x,
         y0=-abut_y,
-        x1=right_dim_x + dim_gap,
+        x1=right_dim_x,
         y1=abut_y,
         text=_format_mm(depth_y_mm, "Abutment t"),
         ext0=(abut_x, -abut_y),
         ext1=(abut_x, abut_y),
         text_xshift=20,
     )
-    if pilecap_overhang_mm > 1e-9:
-        _add_dimension_line(
-            fig,
-            x0=right_dim_x,
-            y0=-pile_y,
-            x1=right_dim_x,
-            y1=-abut_y,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(pile_x, -pile_y),
-            ext1=(abut_x, -abut_y),
-            text_xshift=18,
-        )
-        _add_dimension_line(
-            fig,
-            x0=right_dim_x,
-            y0=abut_y,
-            x1=right_dim_x,
-            y1=pile_y,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(abut_x, abut_y),
-            ext1=(pile_x, pile_y),
-            text_xshift=18,
-        )
-
-    x_centers = _unique_sorted_positions(bearing_records, "x_mm")
-    y_centers = _unique_sorted_positions(bearing_records, "y_mm")
-    if len(x_centers) > 1:
-        chain_y = max(y_centers or [0.0]) + half + dim_gap * 0.55
-        for left_x, right_x in zip(x_centers[:-1], x_centers[1:]):
-            _add_dimension_line(
-                fig,
-                x0=left_x,
-                y0=chain_y,
-                x1=right_x,
-                y1=chain_y,
-                text=_format_mm(right_x - left_x, "c/c"),
-                ext0=(left_x, max(y_centers or [0.0]) + half),
-                ext1=(right_x, max(y_centers or [0.0]) + half),
-                text_yshift=10,
-            )
-    if len(y_centers) > 1:
-        row_dim_x = (max(x_centers) if x_centers else 0.0) + half + dim_gap * 0.85
-        for low_y, high_y in zip(y_centers[:-1], y_centers[1:]):
-            _add_dimension_line(
-                fig,
-                x0=row_dim_x,
-                y0=low_y,
-                x1=row_dim_x,
-                y1=high_y,
-                text=_format_mm(high_y - low_y, "row c/c"),
-                ext0=((max(x_centers) if x_centers else 0.0) + half, low_y),
-                ext1=((max(x_centers) if x_centers else 0.0) + half, high_y),
-                text_xshift=20,
-            )
-    if bearing_records:
-        first_bearing = sorted(bearing_records, key=lambda item: (float(item.get("y_mm", 0.0)), float(item.get("x_mm", 0.0))))[0]
-        bx = float(first_bearing.get("x_mm", 0.0))
-        by = float(first_bearing.get("y_mm", 0.0))
-        _add_dimension_line(
-            fig,
-            x0=bx - half,
-            y0=by - half - dim_gap * 0.35,
-            x1=bx + half,
-            y1=by - half - dim_gap * 0.35,
-            text=_format_mm(bearing_size_mm, "Bearing"),
-            ext0=(bx - half, by - half),
-            ext1=(bx + half, by - half),
-            text_yshift=-8,
-        )
-        _add_dimension_line(
-            fig,
-            x0=bx - half - dim_gap * 0.35,
-            y0=by - half,
-            x1=bx - half - dim_gap * 0.35,
-            y1=by + half,
-            text=_format_mm(bearing_size_mm),
-            ext0=(bx - half, by - half),
-            ext1=(bx - half, by + half),
-            text_xshift=-18,
-        )
-    if strip_center_x_mm is not None and strip_width_x_mm is not None:
-        strip_x0 = max(-abut_x, strip_center_x_mm - strip_width_x_mm / 2.0)
-        strip_x1 = min(abut_x, strip_center_x_mm + strip_width_x_mm / 2.0)
-        _add_dimension_line(
-            fig,
-            x0=strip_x0,
-            y0=abut_y + dim_gap * 0.55,
-            x1=strip_x1,
-            y1=abut_y + dim_gap * 0.55,
-            text=_format_mm(strip_x1 - strip_x0, "beff"),
-            ext0=(strip_x0, abut_y),
-            ext1=(strip_x1, abut_y),
-            text_yshift=10,
-            color="#b45309",
-        )
 
     axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
     axis_origin_x = -pile_x - axis_gap
@@ -1942,109 +1801,24 @@ def front_view(
     bottom_dim_z = -pilecap_thickness_mm - dim_gap
     _add_dimension_line(
         fig,
-        x0=-pile_x,
-        y0=bottom_dim_z - dim_gap * 2.0,
-        x1=pile_x,
-        y1=bottom_dim_z - dim_gap * 2.0,
-        text=_format_mm(2.0 * pile_x, "Pile cap"),
-        ext0=(-pile_x, -pilecap_thickness_mm),
-        ext1=(pile_x, -pilecap_thickness_mm),
-    )
-    _add_dimension_line(
-        fig,
         x0=-abut_x,
-        y0=bottom_dim_z - dim_gap,
+        y0=bottom_dim_z,
         x1=abut_x,
-        y1=bottom_dim_z - dim_gap,
+        y1=bottom_dim_z,
         text=_format_mm(width_x_mm, "Abutment"),
         ext0=(-abut_x, 0.0),
         ext1=(abut_x, 0.0),
     )
-    if pilecap_overhang_mm > 1e-9:
-        _add_dimension_line(
-            fig,
-            x0=-pile_x,
-            y0=bottom_dim_z,
-            x1=-abut_x,
-            y1=bottom_dim_z,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(-pile_x, -pilecap_thickness_mm),
-            ext1=(-abut_x, 0.0),
-        )
-        _add_dimension_line(
-            fig,
-            x0=abut_x,
-            y0=bottom_dim_z,
-            x1=pile_x,
-            y1=bottom_dim_z,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(abut_x, 0.0),
-            ext1=(pile_x, -pilecap_thickness_mm),
-        )
 
-    x_centers = _unique_sorted_positions(bearing_records, "x_mm")
-    if len(x_centers) > 1:
-        chain_z = bottom_dim_z - dim_gap * 3.0
-        for left_x, right_x in zip(x_centers[:-1], x_centers[1:]):
-            _add_dimension_line(
-                fig,
-                x0=left_x,
-                y0=chain_z,
-                x1=right_x,
-                y1=chain_z,
-                text=_format_mm(right_x - left_x, "c/c"),
-                ext0=(left_x, -pilecap_thickness_mm),
-                ext1=(right_x, -pilecap_thickness_mm),
-                text_yshift=-8,
-            )
-    if bearing_records:
-        first_bearing = sorted(bearing_records, key=lambda item: float(item.get("x_mm", 0.0)))[0]
-        bx = float(first_bearing.get("x_mm", 0.0))
-        bz = float(first_bearing.get("z_mm", height_z_mm))
-        bearing_dim_z = bz - dim_gap * 0.45
-        _add_dimension_line(
-            fig,
-            x0=bx - half,
-            y0=bearing_dim_z,
-            x1=bx + half,
-            y1=bearing_dim_z,
-            text=_format_mm(bearing_size_mm, "Bearing"),
-            ext0=(bx - half, bz),
-            ext1=(bx + half, bz),
-            text_yshift=-8,
-        )
-
-    right_dim_x = pile_x + dim_gap
+    right_dim_x = abut_x + dim_gap
     _add_dimension_line(
         fig,
         x0=right_dim_x,
-        y0=-pilecap_thickness_mm,
-        x1=right_dim_x,
-        y1=0.0,
-        text=_format_mm(pilecap_thickness_mm, "Pile cap thk"),
-        ext0=(pile_x, -pilecap_thickness_mm),
-        ext1=(pile_x, 0.0),
-        text_xshift=22,
-    )
-    _add_dimension_line(
-        fig,
-        x0=right_dim_x + dim_gap,
         y0=0.0,
-        x1=right_dim_x + dim_gap,
+        x1=right_dim_x,
         y1=height_z_mm,
-        text=_format_mm(height_z_mm, "Bearing level"),
+        text=_format_mm(height_z_mm, "Height"),
         ext0=(abut_x, 0.0),
-        ext1=(abut_x, height_z_mm),
-        text_xshift=22,
-    )
-    _add_dimension_line(
-        fig,
-        x0=right_dim_x + dim_gap * 2.0,
-        y0=-pilecap_thickness_mm,
-        x1=right_dim_x + dim_gap * 2.0,
-        y1=height_z_mm,
-        text=_format_mm(height_z_mm + pilecap_thickness_mm, "Overall"),
-        ext0=(pile_x, -pilecap_thickness_mm),
         ext1=(abut_x, height_z_mm),
         text_xshift=22,
     )
@@ -2258,109 +2032,24 @@ def side_view(
     bottom_dim_z = -pilecap_thickness_mm - dim_gap
     _add_dimension_line(
         fig,
-        x0=-pile_y,
-        y0=bottom_dim_z - dim_gap * 2.0,
-        x1=pile_y,
-        y1=bottom_dim_z - dim_gap * 2.0,
-        text=_format_mm(2.0 * pile_y, "Pile cap"),
-        ext0=(-pile_y, -pilecap_thickness_mm),
-        ext1=(pile_y, -pilecap_thickness_mm),
-    )
-    _add_dimension_line(
-        fig,
         x0=-abut_y,
-        y0=bottom_dim_z - dim_gap,
+        y0=bottom_dim_z,
         x1=abut_y,
-        y1=bottom_dim_z - dim_gap,
+        y1=bottom_dim_z,
         text=_format_mm(depth_y_mm, "Abutment t"),
         ext0=(-abut_y, 0.0),
         ext1=(abut_y, 0.0),
     )
-    if pilecap_overhang_mm > 1e-9:
-        _add_dimension_line(
-            fig,
-            x0=-pile_y,
-            y0=bottom_dim_z,
-            x1=-abut_y,
-            y1=bottom_dim_z,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(-pile_y, -pilecap_thickness_mm),
-            ext1=(-abut_y, 0.0),
-        )
-        _add_dimension_line(
-            fig,
-            x0=abut_y,
-            y0=bottom_dim_z,
-            x1=pile_y,
-            y1=bottom_dim_z,
-            text=_format_mm(pilecap_overhang_mm),
-            ext0=(abut_y, 0.0),
-            ext1=(pile_y, -pilecap_thickness_mm),
-        )
 
-    y_centers = _unique_sorted_positions(bearing_records, "y_mm")
-    if len(y_centers) > 1:
-        chain_z = bottom_dim_z - dim_gap * 3.0
-        for left_y, right_y in zip(y_centers[:-1], y_centers[1:]):
-            _add_dimension_line(
-                fig,
-                x0=left_y,
-                y0=chain_z,
-                x1=right_y,
-                y1=chain_z,
-                text=_format_mm(right_y - left_y, "row c/c"),
-                ext0=(left_y, -pilecap_thickness_mm),
-                ext1=(right_y, -pilecap_thickness_mm),
-                text_yshift=-8,
-            )
-    if bearing_records:
-        first_bearing = sorted(bearing_records, key=lambda item: float(item.get("y_mm", 0.0)))[0]
-        by = float(first_bearing.get("y_mm", 0.0))
-        bz = float(first_bearing.get("z_mm", height_z_mm))
-        bearing_dim_z = bz - dim_gap * 0.45
-        _add_dimension_line(
-            fig,
-            x0=by - half,
-            y0=bearing_dim_z,
-            x1=by + half,
-            y1=bearing_dim_z,
-            text=_format_mm(bearing_size_mm, "Bearing"),
-            ext0=(by - half, bz),
-            ext1=(by + half, bz),
-            text_yshift=-8,
-        )
-
-    right_dim_y = pile_y + dim_gap
+    right_dim_y = abut_y + dim_gap
     _add_dimension_line(
         fig,
         x0=right_dim_y,
-        y0=-pilecap_thickness_mm,
-        x1=right_dim_y,
-        y1=0.0,
-        text=_format_mm(pilecap_thickness_mm, "Pile cap thk"),
-        ext0=(pile_y, -pilecap_thickness_mm),
-        ext1=(pile_y, 0.0),
-        text_xshift=22,
-    )
-    _add_dimension_line(
-        fig,
-        x0=right_dim_y + dim_gap,
         y0=0.0,
-        x1=right_dim_y + dim_gap,
+        x1=right_dim_y,
         y1=height_z_mm,
-        text=_format_mm(height_z_mm, "Bearing level"),
+        text=_format_mm(height_z_mm, "Height"),
         ext0=(abut_y, 0.0),
-        ext1=(abut_y, height_z_mm),
-        text_xshift=22,
-    )
-    _add_dimension_line(
-        fig,
-        x0=right_dim_y + dim_gap * 2.0,
-        y0=-pilecap_thickness_mm,
-        x1=right_dim_y + dim_gap * 2.0,
-        y1=height_z_mm,
-        text=_format_mm(height_z_mm + pilecap_thickness_mm, "Overall"),
-        ext0=(pile_y, -pilecap_thickness_mm),
         ext1=(abut_y, height_z_mm),
         text_xshift=22,
     )
