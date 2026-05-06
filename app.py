@@ -1070,7 +1070,8 @@ COLORS = {
     "grid": "#e5e7eb",
 }
 
-DIMENSION_COLOR = "#94a3b8"
+DIMENSION_COLOR = "#ff0000"
+DIMENSION_TEXT_COLOR = "#00b828"
 LOAD_TABLE_LINE_GAP_MM = 175.0
 FRONT_VIEW_LOAD_TABLE_LINE_GAP_MM = LOAD_TABLE_LINE_GAP_MM * 1.5
 SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM = 325.0
@@ -1157,8 +1158,7 @@ def _add_autorange_points(fig: go.Figure, x0: float, x1: float, y0: float, y1: f
 
 
 def _format_mm(value: float, label: str | None = None) -> str:
-    text = f"{abs(value):,.0f} mm"
-    return f"{label} {text}" if label else text
+    return f"{abs(value):.0f}"
 
 
 def _add_dimension_line(
@@ -1177,10 +1177,17 @@ def _add_dimension_line(
 ) -> None:
     if math.hypot(x1 - x0, y1 - y0) <= 1e-9:
         return
-    line_style = {"color": color, "width": 0.5}
+    line_style = {"color": color, "width": 1.1}
+    length = math.hypot(x1 - x0, y1 - y0)
+    extension_overrun = min(90.0, max(28.0, length * 0.018))
     for source, target in ((ext0, (x0, y0)), (ext1, (x1, y1))):
         if source is None:
             continue
+        extension_length = math.hypot(target[0] - source[0], target[1] - source[1])
+        if extension_length > 1e-9:
+            ux = (target[0] - source[0]) / extension_length
+            uy = (target[1] - source[1]) / extension_length
+            target = (target[0] + ux * extension_overrun, target[1] + uy * extension_overrun)
         fig.add_shape(
             type="line",
             layer="above",
@@ -1198,12 +1205,19 @@ def _add_dimension_line(
         "text": "",
         "showarrow": True,
         "arrowhead": 3,
-        "arrowsize": 0.65,
-        "arrowwidth": 0.6,
+        "arrowsize": 1.05,
+        "arrowwidth": 1.1,
         "arrowcolor": color,
     }
     fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, **arrow_style)
     fig.add_annotation(x=x0, y=y0, ax=x1, ay=y1, **arrow_style)
+    is_vertical = abs(x1 - x0) < abs(y1 - y0)
+    label_xshift = text_xshift
+    label_yshift = text_yshift
+    if is_vertical and label_xshift == 0:
+        label_xshift = -18
+    if not is_vertical and label_yshift == 0:
+        label_yshift = 15
     fig.add_annotation(
         x=(x0 + x1) / 2.0,
         y=(y0 + y1) / 2.0,
@@ -1211,11 +1225,10 @@ def _add_dimension_line(
         showarrow=False,
         xanchor="center",
         yanchor="middle",
-        xshift=text_xshift,
-        yshift=text_yshift,
-        bgcolor="rgba(255,255,255,0.86)",
-        borderpad=1,
-        font={"color": color, "size": 9},
+        xshift=label_xshift,
+        yshift=label_yshift,
+        textangle=-90 if is_vertical else 0,
+        font={"color": DIMENSION_TEXT_COLOR, "size": 15},
     )
     xs = [x0, x1]
     ys = [y0, y1]
@@ -1597,7 +1610,7 @@ def plan_view(
         text=_format_mm(depth_y_mm, "Abutment t"),
         ext0=(abut_x, -abut_y),
         ext1=(abut_x, abut_y),
-        text_xshift=20,
+        text_xshift=-18,
     )
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
@@ -1626,7 +1639,7 @@ def plan_view(
                 x1=row_dim_x,
                 y1=high_y,
                 text=_format_mm(high_y - low_y),
-                text_xshift=18,
+                text_xshift=-18,
             )
 
     axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
@@ -1853,7 +1866,7 @@ def front_view(
         text=_format_mm(height_z_mm, "Height"),
         ext0=(abut_x, 0.0),
         ext1=(abut_x, height_z_mm),
-        text_xshift=22,
+        text_xshift=-18,
     )
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
@@ -2099,7 +2112,7 @@ def side_view(
         text=_format_mm(height_z_mm, "Height"),
         ext0=(abut_y, 0.0),
         ext1=(abut_y, height_z_mm),
-        text_xshift=22,
+        text_xshift=-18,
     )
 
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
