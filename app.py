@@ -2784,31 +2784,30 @@ with st.sidebar:
         "Project JSON file",
         type=["json"],
         key="project_file_upload",
-        help="Open a JSON file previously saved from this app.",
+        help="Upload a JSON file previously saved from this app. It will open automatically.",
     )
-    project_cols = st.columns(2)
-    with project_cols[0]:
-        st.download_button(
-            "Save",
-            data=project_payload_json(),
-            file_name="rc_abutment_uls_project.json",
-            mime="application/json",
-            width="stretch",
-            key="project_save_button",
-        )
-    with project_cols[1]:
-        if st.button("Open File", width="stretch", key="project_open_button"):
-            if uploaded_project is None:
-                st.warning("Choose a saved project JSON file first.")
+    if uploaded_project is not None:
+        uploaded_bytes = uploaded_project.getvalue()
+        uploaded_text = uploaded_bytes.decode("utf-8")
+        upload_signature = f"{uploaded_project.name}:{len(uploaded_bytes)}:{uploaded_text[:80]}:{uploaded_text[-80:]}"
+        if upload_signature != st.session_state.get("project_loaded_upload_signature"):
+            try:
+                payload = json.loads(uploaded_text)
+                apply_project_payload(payload)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Could not open project file: {exc}")
             else:
-                try:
-                    payload = json.loads(uploaded_project.getvalue().decode("utf-8"))
-                    apply_project_payload(payload)
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Could not open project file: {exc}")
-                else:
-                    st.session_state.project_file_message = "Project file loaded."
-                    st.rerun()
+                st.session_state.project_loaded_upload_signature = upload_signature
+                st.session_state.project_file_message = "Project file loaded."
+                st.rerun()
+    st.download_button(
+        "Save",
+        data=project_payload_json(),
+        file_name="rc_abutment_uls_project.json",
+        mime="application/json",
+        width="stretch",
+        key="project_save_button",
+    )
 
     st.header("Design Basis")
     code_choice = st.selectbox(
