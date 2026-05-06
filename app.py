@@ -1198,8 +1198,8 @@ def _add_dimension_line(
         "text": "",
         "showarrow": True,
         "arrowhead": 3,
-        "arrowsize": 0.45,
-        "arrowwidth": 0.5,
+        "arrowsize": 0.65,
+        "arrowwidth": 0.6,
         "arrowcolor": color,
     }
     fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, **arrow_style)
@@ -1602,29 +1602,28 @@ def plan_view(
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
-    if len(x_centers) > 1:
+    if x_centers:
         bearing_dim_y = max(abut_y + dim_gap * 0.75, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.55)
-        for index, (left_x, right_x) in enumerate(zip(x_centers[:-1], x_centers[1:])):
-            dim_y = bearing_dim_y + (index % 2) * dim_gap * 0.28
+        x_chain = [-abut_x, *x_centers, abut_x]
+        for left_x, right_x in zip(x_chain[:-1], x_chain[1:]):
             _add_dimension_line(
                 fig,
                 x0=left_x,
-                y0=dim_y,
+                y0=bearing_dim_y,
                 x1=right_x,
-                y1=dim_y,
+                y1=bearing_dim_y,
                 text=_format_mm(right_x - left_x),
                 text_yshift=8,
             )
-            _add_autorange_points(fig, left_x, right_x, dim_y, dim_y)
     if len(y_centers) > 1:
         row_dim_x = abut_x + dim_gap * 2.05
-        for index, (low_y, high_y) in enumerate(zip(y_centers[:-1], y_centers[1:])):
-            dim_x = row_dim_x + (index % 2) * dim_gap * 0.35
+        y_chain = [-abut_y, *y_centers, abut_y]
+        for low_y, high_y in zip(y_chain[:-1], y_chain[1:]):
             _add_dimension_line(
                 fig,
-                x0=dim_x,
+                x0=row_dim_x,
                 y0=low_y,
-                x1=dim_x,
+                x1=row_dim_x,
                 y1=high_y,
                 text=_format_mm(high_y - low_y),
                 text_xshift=18,
@@ -1858,16 +1857,16 @@ def front_view(
     )
 
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
-    if len(x_centers) > 1:
+    if x_centers:
         bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.65
-        for index, (left_x, right_x) in enumerate(zip(x_centers[:-1], x_centers[1:])):
-            dim_z = bearing_dim_z + (index % 2) * dim_gap * 0.28
+        x_chain = [-abut_x, *x_centers, abut_x]
+        for left_x, right_x in zip(x_chain[:-1], x_chain[1:]):
             _add_dimension_line(
                 fig,
                 x0=left_x,
-                y0=dim_z,
+                y0=bearing_dim_z,
                 x1=right_x,
-                y1=dim_z,
+                y1=bearing_dim_z,
                 text=_format_mm(right_x - left_x),
                 text_yshift=8,
             )
@@ -2104,16 +2103,16 @@ def side_view(
     )
 
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
-    if len(y_centers) > 1:
+    if y_centers:
         bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.65
-        for index, (left_y, right_y) in enumerate(zip(y_centers[:-1], y_centers[1:])):
-            dim_z = bearing_dim_z + (index % 2) * dim_gap * 0.28
+        y_chain = [-abut_y, *y_centers, abut_y]
+        for left_y, right_y in zip(y_chain[:-1], y_chain[1:]):
             _add_dimension_line(
                 fig,
                 x0=left_y,
-                y0=dim_z,
+                y0=bearing_dim_z,
                 x1=right_y,
-                y1=dim_z,
+                y1=bearing_dim_z,
                 text=_format_mm(right_y - left_y),
                 text_yshift=8,
             )
