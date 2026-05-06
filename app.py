@@ -1229,6 +1229,10 @@ def _add_dimension_line(
     _add_autorange_points(fig, min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad)
 
 
+def _unique_sorted_positions(records: Iterable[dict], key: str) -> list[float]:
+    return sorted({round(float(row.get(key, 0.0)), 3) for row in records})
+
+
 def _max_abs_component(records: Iterable[dict], keys: Iterable[str]) -> float:
     values: list[float] = []
     for row in records:
@@ -1596,6 +1600,36 @@ def plan_view(
         text_xshift=20,
     )
 
+    x_centers = _unique_sorted_positions(bearing_records, "x_mm")
+    y_centers = _unique_sorted_positions(bearing_records, "y_mm")
+    if len(x_centers) > 1:
+        bearing_dim_y = max(abut_y + dim_gap * 0.75, (max(load_text_ys) if load_text_ys else abut_y) + dim_gap * 0.55)
+        for index, (left_x, right_x) in enumerate(zip(x_centers[:-1], x_centers[1:])):
+            dim_y = bearing_dim_y + (index % 2) * dim_gap * 0.28
+            _add_dimension_line(
+                fig,
+                x0=left_x,
+                y0=dim_y,
+                x1=right_x,
+                y1=dim_y,
+                text=_format_mm(right_x - left_x),
+                text_yshift=8,
+            )
+            _add_autorange_points(fig, left_x, right_x, dim_y, dim_y)
+    if len(y_centers) > 1:
+        row_dim_x = abut_x + dim_gap * 2.05
+        for index, (low_y, high_y) in enumerate(zip(y_centers[:-1], y_centers[1:])):
+            dim_x = row_dim_x + (index % 2) * dim_gap * 0.35
+            _add_dimension_line(
+                fig,
+                x0=dim_x,
+                y0=low_y,
+                x1=dim_x,
+                y1=high_y,
+                text=_format_mm(high_y - low_y),
+                text_xshift=18,
+            )
+
     axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
     axis_origin_x = -pile_x - axis_gap
     axis_origin_y = -pile_y - axis_gap
@@ -1822,6 +1856,21 @@ def front_view(
         ext1=(abut_x, height_z_mm),
         text_xshift=22,
     )
+
+    x_centers = _unique_sorted_positions(bearing_records, "x_mm")
+    if len(x_centers) > 1:
+        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.65
+        for index, (left_x, right_x) in enumerate(zip(x_centers[:-1], x_centers[1:])):
+            dim_z = bearing_dim_z + (index % 2) * dim_gap * 0.28
+            _add_dimension_line(
+                fig,
+                x0=left_x,
+                y0=dim_z,
+                x1=right_x,
+                y1=dim_z,
+                text=_format_mm(right_x - left_x),
+                text_yshift=8,
+            )
 
     axis_gap = max(950.0, max(width_x_mm, height_z_mm) * 0.15)
     axis_origin_x = -pile_x - axis_gap
@@ -2053,6 +2102,21 @@ def side_view(
         ext1=(abut_y, height_z_mm),
         text_xshift=22,
     )
+
+    y_centers = _unique_sorted_positions(bearing_records, "y_mm")
+    if len(y_centers) > 1:
+        bearing_dim_z = max(max(load_text_zs) if load_text_zs else max(load_z_extents), height_z_mm + bearing_h) + dim_gap * 0.65
+        for index, (left_y, right_y) in enumerate(zip(y_centers[:-1], y_centers[1:])):
+            dim_z = bearing_dim_z + (index % 2) * dim_gap * 0.28
+            _add_dimension_line(
+                fig,
+                x0=left_y,
+                y0=dim_z,
+                x1=right_y,
+                y1=dim_z,
+                text=_format_mm(right_y - left_y),
+                text_yshift=8,
+            )
 
     axis_gap = max(950.0, max(depth_y_mm, height_z_mm) * 0.15)
     axis_origin_y = -pile_y - axis_gap
