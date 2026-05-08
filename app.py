@@ -4184,6 +4184,10 @@ with st.sidebar:
                 "dw": float(factor_preset["dw"] if factor_preset["dw"] is not None else st.session_state.get("approach_slab_dw_factor", 1.50)),
                 "ll": float(factor_preset["ll"] if factor_preset["ll"] is not None else st.session_state.get("approach_slab_ll_factor", 1.75)),
             }
+            if approach_slab_factor_code != "Custom factors":
+                st.session_state.approach_slab_dc_factor = factor_values["dc"]
+                st.session_state.approach_slab_dw_factor = factor_values["dw"]
+                st.session_state.approach_slab_ll_factor = factor_values["ll"]
             factor_cols = st.columns(3)
             with factor_cols[0]:
                 approach_slab_dc_factor = st.number_input(
