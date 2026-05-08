@@ -2898,6 +2898,7 @@ def _add_side_earth_pressure_diagram(
     soil_side = -force_sign
     face_y = soil_side * abut_y
     max_len = min(max(height_z_mm * 0.18, 360.0), max(620.0, pile_y * 0.58))
+    label_gap = max(300.0, max_len * 0.32)
 
     p_soil_bottom = 2.0 * service_soil / earth_pressure.height_m
     p_other = service_other / earth_pressure.height_m
@@ -2971,9 +2972,20 @@ def _add_side_earth_pressure_diagram(
     soil_uls = abs(earth_pressure.uls_soil_vy_kn)
     uniform_uls = abs(earth_pressure.uls_other_vy_kn) + abs(earth_pressure.uls_live_vy_kn)
     total_uls = soil_uls + uniform_uls
+    resultant_z = 0.0
     if total_uls > 1e-9:
         resultant_z = (soil_uls * h_draw / 3.0 + uniform_uls * h_draw / 2.0) / total_uls
         resultant_len = max(uniform_len + len_soil * (1.0 - resultant_z / h_draw), max_len * 0.32)
+        resultant_label_y = y_at(max_len + label_gap)
+        fig.add_shape(
+            type="line",
+            layer="above",
+            x0=face_y,
+            y0=resultant_z,
+            x1=resultant_label_y,
+            y1=resultant_z,
+            line={"color": "#b45309", "width": 1.2, "dash": "dot"},
+        )
         _add_load_arrow(
             fig,
             x=y_at(resultant_len + max_len * 0.16),
@@ -2985,32 +2997,144 @@ def _add_side_earth_pressure_diagram(
         )
         _add_load_tag(
             fig,
-            x=y_at(max_len + max(240.0, max_len * 0.18)),
+            x=resultant_label_y,
             y=resultant_z,
-            text=f"ULS Vy {earth_pressure.uls_vy_kn:+.0f} kN<br>Mux {earth_pressure.uls_mux_knm:+.0f} kN-m",
+            text=(
+                "<b>ULS resultant</b><br>"
+                f"Vy = {earth_pressure.uls_vy_kn:+.0f} kN<br>"
+                f"z_R = {resultant_z / 1000.0:.2f} m above base<br>"
+                f"Mux = {earth_pressure.uls_mux_knm:+.0f} kN-m"
+            ),
             color="#92400e",
             xanchor="right" if soil_side < 0.0 else "left",
             yanchor="middle",
         )
 
     service_total = service_soil + service_other + service_live
+    component_lines = [
+        f"EH triangular: {service_soil:.1f} kN/m @ H/3",
+        f"p_base = {p_soil_bottom:.1f} kPa",
+    ]
+    if service_other > 1e-9:
+        component_lines.append(f"q surcharge: {service_other:.1f} kN/m @ H/2")
+    if service_live > 1e-9:
+        component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
     _add_load_tag(
         fig,
-        x=y_at(max_len * 0.55),
-        y=h_draw + max(150.0, height_z_mm * 0.035),
+        x=y_at(max_len + label_gap),
+        y=max(h_draw * 0.72, min(h_draw + max(160.0, height_z_mm * 0.035), height_z_mm + max(220.0, height_z_mm * 0.05))),
         text=(
-            "<b>Earth pressure</b><br>"
-            f"K={earth_pressure.pressure_coefficient:.3f}, H={earth_pressure.height_m:.2f} m<br>"
-            f"Service {service_total:.1f} kN/m"
+            "<b>Lateral earth pressure</b><br>"
+            f"{earth_pressure.combination}<br>"
+            f"K = {earth_pressure.pressure_coefficient:.3f}, H = {earth_pressure.height_m:.2f} m<br>"
+            f"Service resultant = {service_total:.1f} kN/m<br>"
+            + "<br>".join(component_lines)
         ),
         color="#0f172a",
+        xanchor="right" if soil_side < 0.0 else "left",
+        yanchor="middle",
+    )
+
+    outer_y = y_at(max_len + label_gap + 280.0)
+    load_y_extents.extend([face_y, y_at(max_len), outer_y])
+    load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z])
+
+
+def _add_side_approach_slab_reaction(
+    fig: go.Figure,
+    *,
+    approach_slab: ApproachSlabReactionSummary,
+    height_z_mm: float,
+    bearing_h: float,
+    load_y_extents: list[float],
+    load_z_extents: list[float],
+) -> None:
+    if approach_slab.uls_pu_z_kn <= 1e-9:
+        return
+
+    face_y = approach_slab.centroid_y_mm
+    soil_side = 1.0 if face_y >= 0.0 else -1.0
+    gap_mm = max(approach_slab.gap_m * 1000.0, 0.0)
+    gap_draw_limit = max(1400.0, height_z_mm * 0.36)
+    gap_draw = min(max(gap_mm, 420.0), gap_draw_limit)
+    gap_end_y = face_y + soil_side * gap_draw
+    slab_z0 = height_z_mm + max(55.0, bearing_h * 0.32)
+    slab_thk = min(max(approach_slab.thickness_m * 1000.0, 75.0), 230.0)
+    slab_z1 = slab_z0 + slab_thk
+
+    _add_rect(
+        fig,
+        x0=min(face_y, gap_end_y),
+        x1=max(face_y, gap_end_y),
+        y0=slab_z0,
+        y1=slab_z1,
+        fillcolor="#e5e7eb",
+        linecolor="#64748b",
+        opacity=0.82,
+        layer="above",
+    )
+    fig.add_shape(
+        type="line",
+        layer="above",
+        x0=gap_end_y,
+        y0=slab_z0,
+        x1=gap_end_y,
+        y1=slab_z1,
+        line={"color": "#64748b", "width": 1.4, "dash": "dash"},
+    )
+
+    dim_z = slab_z1 + max(90.0, height_z_mm * 0.018)
+    fig.add_shape(
+        type="line",
+        layer="above",
+        x0=face_y,
+        y0=dim_z,
+        x1=gap_end_y,
+        y1=dim_z,
+        line={"color": "#475569", "width": 1.1, "dash": "dot"},
+    )
+    gap_note = " shown compressed" if gap_mm > gap_draw + 1.0 else ""
+    _add_load_tag(
+        fig,
+        x=(face_y + gap_end_y) / 2.0,
+        y=dim_z + max(80.0, height_z_mm * 0.015),
+        text=f"l_gap = {approach_slab.gap_m:.2f} m{gap_note}",
+        color="#475569",
         xanchor="center",
         yanchor="bottom",
     )
 
-    outer_y = y_at(max_len + max(260.0, max_len * 0.20))
-    load_y_extents.extend([face_y, y_at(max_len), outer_y])
-    load_z_extents.extend([0.0, h_draw, h_draw + max(220.0, height_z_mm * 0.05)])
+    arrow_len = max(520.0, min(980.0, height_z_mm * 0.18))
+    arrow_tail_z = slab_z1 + arrow_len
+    _add_load_arrow(
+        fig,
+        x=face_y,
+        y=arrow_tail_z,
+        dx=0.0,
+        dy=-(arrow_tail_z - slab_z0),
+        label="",
+        color="#dc2626",
+    )
+    label_y = face_y + soil_side * max(gap_draw * 0.58, 520.0)
+    _add_load_tag(
+        fig,
+        x=label_y,
+        y=arrow_tail_z - arrow_len * 0.30,
+        text=(
+            "<b>Approach slab reaction</b><br>"
+            f"Service DC+DW = {approach_slab.service_dc_kn + approach_slab.service_dw_kn:.0f} kN<br>"
+            f"Service LL = {approach_slab.service_ll_kn:.0f} kN<br>"
+            f"ULS Pu_z = {approach_slab.uls_pu_z_kn:.0f} kN<br>"
+            f"y_AS = {approach_slab.centroid_y_mm:+.0f} mm, "
+            f"Mux = {approach_slab.uls_mux_knm:+.0f} kN-m"
+        ),
+        color="#991b1b",
+        xanchor="right" if soil_side < 0.0 else "left",
+        yanchor="middle",
+    )
+
+    load_y_extents.extend([face_y, gap_end_y, label_y])
+    load_z_extents.extend([slab_z0, slab_z1, dim_z, arrow_tail_z])
 
 
 def side_view(
@@ -3022,6 +3146,7 @@ def side_view(
     pilecap_thickness_mm: float,
     bearing_size_mm: float,
     earth_pressure: EarthPressureSummary | None = None,
+    approach_slab: ApproachSlabReactionSummary | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     bearing_records = list(bearings)
@@ -3055,6 +3180,15 @@ def side_view(
             abut_y=abut_y,
             height_z_mm=height_z_mm,
             pile_y=pile_y,
+            load_y_extents=load_y_extents,
+            load_z_extents=load_z_extents,
+        )
+    if approach_slab is not None:
+        _add_side_approach_slab_reaction(
+            fig,
+            approach_slab=approach_slab,
+            height_z_mm=height_z_mm,
+            bearing_h=bearing_h,
             load_y_extents=load_y_extents,
             load_z_extents=load_z_extents,
         )
@@ -5040,6 +5174,7 @@ with tabs[0]:
             pilecap_thickness_mm=pilecap_thickness_mm,
             bearing_size_mm=bearing_size_mm,
             earth_pressure=earth_pressure_result,
+            approach_slab=approach_slab_result,
         ),
         width="stretch",
     )
