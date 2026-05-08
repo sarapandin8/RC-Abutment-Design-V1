@@ -24,6 +24,7 @@ REBAR_FY_BY_DIA_MPA = {
 PMM_METHOD = "PMM surface"
 BIAXIAL_METHODS = ["Load contour", "Linear", PMM_METHOD]
 DEAD_LOAD_FACTOR = 1.40
+BACKFILL_EV_FACTOR = 1.35
 AASHTO_EH_FACTOR = 1.50
 AASHTO_EH_AT_REST_FACTOR = 1.35
 AASHTO_SURCHARGE_FACTOR = 1.50
@@ -123,6 +124,20 @@ class DeadLoadSummary:
     service_dl_kn: float
     factor: float
     uls_pu_z_kn: float
+
+
+@dataclass(frozen=True)
+class BackfillVerticalLoadSummary:
+    width_m: float
+    height_m: float
+    length_x_m: float
+    volume_m3: float
+    gamma_soil_kn_m3: float
+    service_ev_kn: float
+    factor: float
+    uls_pu_z_kn: float
+    centroid_y_mm: float
+    uls_mux_knm: float
 
 
 @dataclass(frozen=True)
@@ -372,6 +387,40 @@ def abutment_dead_load_summary(
     )
 
 
+def backfill_vertical_load_summary(
+    *,
+    width_x_mm: float,
+    depth_y_mm: float,
+    backfill_width_m: float,
+    backfill_height_m: float,
+    gamma_soil_kn_m3: float,
+    factor: float,
+    earth_pressure_direction: str,
+) -> BackfillVerticalLoadSummary:
+    length_x_m = max(float(width_x_mm) / 1000.0, 0.0)
+    width_m = max(float(backfill_width_m), 0.0)
+    height_m = max(float(backfill_height_m), 0.0)
+    gamma_soil = max(float(gamma_soil_kn_m3), 0.0)
+    volume_m3 = length_x_m * width_m * height_m
+    service_ev_kn = volume_m3 * gamma_soil
+    load_factor = float(factor)
+    uls_pu_z_kn = load_factor * service_ev_kn
+    soil_side_sign = -1.0 if str(earth_pressure_direction).strip().startswith("+") else 1.0
+    centroid_y_mm = soil_side_sign * (max(float(depth_y_mm), 0.0) / 2.0 + width_m * 1000.0 / 2.0)
+    return BackfillVerticalLoadSummary(
+        width_m=width_m,
+        height_m=height_m,
+        length_x_m=length_x_m,
+        volume_m3=volume_m3,
+        gamma_soil_kn_m3=gamma_soil,
+        service_ev_kn=service_ev_kn,
+        factor=load_factor,
+        uls_pu_z_kn=uls_pu_z_kn,
+        centroid_y_mm=centroid_y_mm,
+        uls_mux_knm=-centroid_y_mm * uls_pu_z_kn / 1000.0,
+    )
+
+
 def earth_pressure_coefficient(phi_deg: float, pressure_mode: str) -> float:
     phi_rad = math.radians(min(max(float(phi_deg), 0.0), 45.0))
     sin_phi = math.sin(phi_rad)
@@ -605,11 +654,13 @@ def pilecap_base_force_summary_table(
     resultant: BearingResultant,
     width_x_mm: float,
     dead_load: DeadLoadSummary | None = None,
+    backfill_vertical: BackfillVerticalLoadSummary | None = None,
     earth_pressure: EarthPressureSummary | None = None,
 ) -> pd.DataFrame:
     width_m = max(float(width_x_mm) / 1000.0, 1e-9)
     dead_load_pu_kn = dead_load.uls_pu_z_kn if dead_load is not None else 0.0
-    total_pu_kn = resultant.pu_kn + dead_load_pu_kn
+    backfill_pu_kn = backfill_vertical.uls_pu_z_kn if backfill_vertical is not None else 0.0
+    total_pu_kn = resultant.pu_kn + dead_load_pu_kn + backfill_pu_kn
     rows = [
         {
             "Resultant for pile cap": "Pu_z from bearings",
@@ -633,14 +684,38 @@ def pilecap_base_force_summary_table(
                     "Linearized over x width": f"{dead_load.uls_pu_z_kn / width_m:,.2f} kN/m",
                     "Basis": f"{dead_load.factor:.2f} x self-weight DL",
                 },
+            ]
+        )
+    if backfill_vertical is not None:
+        rows.extend(
+            [
                 {
-                    "Resultant for pile cap": "Total Pu_z for pile cap ULS",
-                    "Point at centroid": f"{total_pu_kn:,.2f} kN",
-                    "Linearized over x width": f"{total_pu_kn / width_m:,.2f} kN/m",
-                    "Basis": "bearing Pu_z + 1.40D self-weight",
+                    "Resultant for pile cap": "Backfill vertical load EV",
+                    "Point at centroid": f"{backfill_vertical.service_ev_kn:,.2f} kN",
+                    "Linearized over x width": f"{backfill_vertical.service_ev_kn / width_m:,.2f} kN/m",
+                    "Basis": "gamma_soil x Lx x b_EV x h_EV",
+                },
+                {
+                    "Resultant for pile cap": "Pu_z from factored EV",
+                    "Point at centroid": f"{backfill_vertical.uls_pu_z_kn:,.2f} kN",
+                    "Linearized over x width": f"{backfill_vertical.uls_pu_z_kn / width_m:,.2f} kN/m",
+                    "Basis": f"{backfill_vertical.factor:.2f} x backfill EV",
                 },
             ]
         )
+    pu_basis = ["bearing Pu_z"]
+    if dead_load is not None:
+        pu_basis.append("self-weight DL")
+    if backfill_vertical is not None:
+        pu_basis.append("backfill EV")
+    rows.append(
+        {
+            "Resultant for pile cap": "Total Pu_z for pile cap ULS",
+            "Point at centroid": f"{total_pu_kn:,.2f} kN",
+            "Linearized over x width": f"{total_pu_kn / width_m:,.2f} kN/m",
+            "Basis": " + ".join(pu_basis),
+        }
+    )
     if earth_pressure is not None:
         total_vy_kn = resultant.vy_kn + earth_pressure.uls_vy_kn
         rows.extend(
@@ -688,22 +763,39 @@ def pilecap_base_force_summary_table(
         ]
     )
     if earth_pressure is not None:
-        total_mux_knm = resultant.mux_knm + earth_pressure.uls_mux_knm
-        rows.extend(
-            [
-                {
-                    "Resultant for pile cap": "Mu_x from earth pressure ULS",
-                    "Point at centroid": f"{earth_pressure.uls_mux_knm:,.2f} kN-m",
-                    "Linearized over x width": f"{earth_pressure.uls_mux_knm / width_m:,.2f} kN-m/m",
-                    "Basis": "EH at H/3, q_other and LS at H/2",
-                },
-                {
-                    "Resultant for pile cap": "Total Mu_x for pile cap ULS",
-                    "Point at centroid": f"{total_mux_knm:,.2f} kN-m",
-                    "Linearized over x width": f"{total_mux_knm / width_m:,.2f} kN-m/m",
-                    "Basis": "bearing Mu_x + earth pressure Mu_x",
-                },
-            ]
+        rows.append(
+            {
+                "Resultant for pile cap": "Mu_x from earth pressure ULS",
+                "Point at centroid": f"{earth_pressure.uls_mux_knm:,.2f} kN-m",
+                "Linearized over x width": f"{earth_pressure.uls_mux_knm / width_m:,.2f} kN-m/m",
+                "Basis": "EH at H/3, q_other and LS at H/2",
+            }
+        )
+    if backfill_vertical is not None:
+        rows.append(
+            {
+                "Resultant for pile cap": "Mu_x from backfill EV eccentricity",
+                "Point at centroid": f"{backfill_vertical.uls_mux_knm:,.2f} kN-m",
+                "Linearized over x width": f"{backfill_vertical.uls_mux_knm / width_m:,.2f} kN-m/m",
+                "Basis": f"-y_EV x Pu_EV / 1000, y_EV = {backfill_vertical.centroid_y_mm:,.0f} mm",
+            }
+        )
+    if earth_pressure is not None or backfill_vertical is not None:
+        total_mux_knm = resultant.mux_knm
+        mux_basis = ["bearing Mu_x"]
+        if earth_pressure is not None:
+            total_mux_knm += earth_pressure.uls_mux_knm
+            mux_basis.append("earth pressure Mu_x")
+        if backfill_vertical is not None:
+            total_mux_knm += backfill_vertical.uls_mux_knm
+            mux_basis.append("backfill EV eccentricity")
+        rows.append(
+            {
+                "Resultant for pile cap": "Total Mu_x for pile cap ULS",
+                "Point at centroid": f"{total_mux_knm:,.2f} kN-m",
+                "Linearized over x width": f"{total_mux_knm / width_m:,.2f} kN-m/m",
+                "Basis": " + ".join(mux_basis),
+            }
         )
     rows.extend(
         [
@@ -3194,8 +3286,12 @@ PROJECT_SETTING_DEFAULTS = {
     "pilecap_thickness_mm": 1500.0,
     "concrete_unit_weight_kn_m3": 24.0,
     "include_earth_pressure": True,
+    "include_backfill_ev": True,
     "earth_load_code": "AASHTO LRFD Strength I",
     "earth_backfill_height_m": 4.5,
+    "backfill_ev_width_m": 0.50,
+    "backfill_ev_height_m": 4.5,
+    "backfill_ev_factor": BACKFILL_EV_FACTOR,
     "soil_preset": "Thailand general backfill",
     "earth_gamma_soil_custom_kn_m3": 18.0,
     "earth_phi_custom_deg": 30.0,
@@ -3512,7 +3608,7 @@ with st.sidebar:
             "Generated earth pressure ULS code",
             EARTH_LOAD_CODES,
             key="earth_load_code",
-            help="Bearing loads are already ULS and are not factored again. This code only factors app-generated earth pressure.",
+            help="Bearing loads are already ULS and are not factored again. This code only factors app-generated EH/EV/surcharge loads.",
         )
         earth_backfill_height_m = st.number_input(
             "Backfill height H (m)",
@@ -3650,8 +3746,44 @@ with st.sidebar:
             "Earth pressure direction",
             ["+y", "-y"],
             key="earth_pressure_direction",
-            help="Controls the sign of Vy and Mu_x in the pile cap force summary.",
+            help="Controls the sign of Vy and Mu_x in the pile cap force summary. Backfill EV is placed on the opposite side of this pressure direction.",
         )
+        with st.expander("Backfill vertical load on pile cap (EV)", expanded=True):
+            include_backfill_ev = st.checkbox(
+                "Include vertical backfill weight on pile cap / heel",
+                value=True,
+                key="include_backfill_ev",
+            )
+            backfill_ev_width_m = st.number_input(
+                "b_EV: backfill width supported by pile cap (m)",
+                min_value=0.0,
+                max_value=30.0,
+                value=float(st.session_state.get("backfill_ev_width_m", max(pilecap_overhang_mm / 1000.0, 0.0))),
+                step=0.10,
+                key="backfill_ev_width_m",
+                help="Measure only the heel/backfill side from the back face of the abutment/stem to the rear edge of pile cap. Do not include the front overhang unless it also supports backfill.",
+            )
+            backfill_ev_height_m = st.number_input(
+                "h_EV: average fill height over that area (m)",
+                min_value=0.0,
+                max_value=30.0,
+                value=float(st.session_state.get("backfill_ev_height_m", earth_backfill_height_m)),
+                step=0.10,
+                key="backfill_ev_height_m",
+                help="Use the average vertical soil height bearing on the pile cap/heel. It may differ from lateral-pressure H if elevations differ.",
+            )
+            backfill_ev_factor = st.number_input(
+                "gamma_EV",
+                min_value=0.0,
+                max_value=3.0,
+                value=float(st.session_state.get("backfill_ev_factor", BACKFILL_EV_FACTOR)),
+                step=0.05,
+                key="backfill_ev_factor",
+                help="Typical AASHTO LRFD maximum EV factor for retaining walls/abutments is 1.35. Use the governing project load combination.",
+            )
+            st.caption(
+                "Preliminary EV area = Lx x b_EV. The centroid is placed at the middle of b_EV on the backfill side of the abutment."
+            )
         stem_bar_dia_mm = st.selectbox(
             "Stem vertical bar diameter for spacing guide",
             REBAR_DIAMETERS_MM,
@@ -3688,14 +3820,23 @@ with st.sidebar:
                 `h_eq` is an equivalent height of soil for traffic live load surcharge. It is not an actual fill height.
                 The app converts it to `q_LS = gamma_soil x h_eq`, then to lateral pressure `K x q_LS`.
 
+                `EV` is the vertical backfill weight directly supported by the pile cap/heel. Use `b_EV` only for the
+                backfill-side projection from the abutment/stem face to the pile cap edge, and use the average fill
+                height above that area.
+
                 Bearing table loads are assumed to be already factored ULS loads. The selected earth pressure code
-                only factors app-generated EH, q_other/ES, and traffic LS. The factored earth pressure is added to
-                the strength-section design over the selected strip width. Do not include the same traffic load in
+                only factors app-generated EH, EV, q_other/ES, and traffic LS. The factored earth pressure is added to
+                the strength-section design over the selected strip width, while EV is added to the pile-cap summary.
+                Do not include the same traffic load in
                 both `q_other` and traffic live load surcharge.
                 """
             )
     else:
         include_earth_pressure = False
+        include_backfill_ev = False
+        backfill_ev_width_m = 0.0
+        backfill_ev_height_m = 0.0
+        backfill_ev_factor = BACKFILL_EV_FACTOR
         st.header("Earth Pressure")
         st.info("Wall Pier mode is selected, so backfill earth pressure inputs are hidden and excluded from the calculations.")
 
@@ -3834,6 +3975,19 @@ dead_load_summary = abutment_dead_load_summary(
     depth_y_mm=depth_y_mm,
     height_z_mm=height_z_mm,
     unit_weight_kn_m3=concrete_unit_weight_kn_m3,
+)
+backfill_vertical_result = (
+    backfill_vertical_load_summary(
+        width_x_mm=width_x_mm,
+        depth_y_mm=depth_y_mm,
+        backfill_width_m=backfill_ev_width_m,
+        backfill_height_m=backfill_ev_height_m,
+        gamma_soil_kn_m3=earth_gamma_soil_kn_m3,
+        factor=backfill_ev_factor,
+        earth_pressure_direction=earth_pressure_direction,
+    )
+    if include_backfill_ev
+    else None
 )
 earth_pressure_summaries: list[EarthPressureSummary] = []
 if include_earth_pressure:
@@ -4187,7 +4341,12 @@ with tabs[1]:
             )
 
     st.subheader("Pile Cap Base Force Summary")
-    earth_caption = "and selected earth pressure loads" if earth_pressure_result is not None else "with earth pressure excluded"
+    pilecap_load_notes = []
+    if earth_pressure_result is not None:
+        pilecap_load_notes.append("selected lateral earth pressure")
+    if backfill_vertical_result is not None:
+        pilecap_load_notes.append("vertical backfill EV")
+    earth_caption = f"and {' plus '.join(pilecap_load_notes)}" if pilecap_load_notes else "with earth/backfill loads excluded"
     st.caption(
         f"Uses all bearing loads transferred to the abutment/pier base centroid, abutment/pier self-weight, "
         f"{earth_caption}. "
@@ -4199,6 +4358,12 @@ with tabs[1]:
     dl_cols[1].metric("Service DL", f"{dead_load_summary.service_dl_kn:,.2f} kN")
     dl_cols[2].metric("DL factor", f"{dead_load_summary.factor:.2f}")
     dl_cols[3].metric("Pu_z from 1.40D", f"{dead_load_summary.uls_pu_z_kn:,.2f} kN")
+    if backfill_vertical_result is not None:
+        ev_cols = st.columns(4)
+        ev_cols[0].metric("EV volume", f"{backfill_vertical_result.volume_m3:,.3f} m3")
+        ev_cols[1].metric("Service EV", f"{backfill_vertical_result.service_ev_kn:,.2f} kN")
+        ev_cols[2].metric("EV factor", f"{backfill_vertical_result.factor:.2f}")
+        ev_cols[3].metric("Pu_z from EV", f"{backfill_vertical_result.uls_pu_z_kn:,.2f} kN")
     if earth_pressure_result is not None:
         ep_cols = st.columns(4)
         ep_cols[0].metric("Earth K", f"{earth_pressure_result.pressure_coefficient:.3f}", delta=earth_pressure_result.combination, delta_color="off")
@@ -4216,7 +4381,13 @@ with tabs[1]:
     elif structure_type == "Wall Pier / Pier wall without backfill":
         st.info("Wall Pier mode: earth pressure is excluded from the pile cap summary and from abutment stem design.")
     st.dataframe(
-        pilecap_base_force_summary_table(global_resultant, width_x_mm, dead_load_summary, earth_pressure_result),
+        pilecap_base_force_summary_table(
+            global_resultant,
+            width_x_mm,
+            dead_load_summary,
+            backfill_vertical_result,
+            earth_pressure_result,
+        ),
         width="stretch",
         hide_index=True,
     )
@@ -4256,6 +4427,13 @@ with tabs[1]:
         )
     else:
         pilecap_note += "Earth pressure is excluded for the selected structure mode/settings. "
+    if backfill_vertical_result is not None:
+        pilecap_note += (
+            "Backfill EV is calculated from gamma_soil x Lx x b_EV x h_EV and placed at the centroid of the supported "
+            "backfill width on the heel/backfill side, so it adds Pu_z and an eccentric Mu_x to the pile-cap summary. "
+        )
+    else:
+        pilecap_note += "Vertical backfill EV is excluded for the selected settings. "
     pilecap_note += (
         "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
         "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
@@ -4316,17 +4494,17 @@ with tabs[3]:
 
         **Structure type and generated load factoring**
 
-        `Structure type = Abutment with backfill` enables earth pressure inputs, section-design earth pressure, and the abutment stem strip design.
+        `Structure type = Abutment with backfill` enables earth pressure inputs, vertical backfill `EV`, section-design earth pressure, and the abutment stem strip design.
         `Structure type = Wall Pier / Pier wall without backfill` hides earth pressure and excludes it from all
         summaries. Bearing loads in the table are assumed to be already factored `ULS` loads from the user's chosen
         bridge load combination, so the app does not factor bearing loads again.
 
-        The selected generated-earth-pressure code applies only to loads created inside the app: `EH`, `q_other / ES`,
-        and traffic live load surcharge `LS`.
+        The selected generated-earth-pressure code applies only to loads created inside the app: `EH`, `EV`,
+        `q_other / ES`, and traffic live load surcharge `LS`.
 
         AASHTO LRFD Strength I factors used by the app:
 
-        `EH active = 1.50`, `EH at-rest = 1.35`, `q_other / ES = 1.50`, `traffic LS = 1.75`
+        `EH active = 1.50`, `EH at-rest = 1.35`, `EV = 1.35`, `q_other / ES = 1.50`, `traffic LS = 1.75`
 
         EN / Eurocode DA1 auto governing runs two preliminary STR/GEO combinations and uses the row with the largest
         absolute earth-pressure `Mu_x`:
@@ -4351,13 +4529,18 @@ with tabs[3]:
         **Pile cap base force summary**
 
         The pile cap summary in the Results tab uses all bearings, transfers their loads to the base centroid of
-        the abutment/pier, adds the abutment/pier self-weight dead load, and includes earth pressure only in
+        the abutment/pier, adds the abutment/pier self-weight dead load, and includes lateral earth pressure plus
+        vertical backfill `EV` only in
         Abutment mode. It is intended as an interface force summary for a separate pile-cap model, not as a pile-cap
         design check.
 
         `DL_self = gamma_c x Lx x t x H`  
         `Pu_z from DL = 1.40 x DL_self`  
-        `Pu_z point = sum(Pu_z bearings) + Pu_z from DL` at the centroid  
+        `EV_service = gamma_soil x Lx x b_EV x h_EV`  
+        `Pu_z from EV = gamma_EV x EV_service`  
+        `y_EV = backfill-side sign x (t / 2 + b_EV / 2)`  
+        `Mu_x from EV = -y_EV x Pu_z from EV`  
+        `Pu_z point = sum(Pu_z bearings) + Pu_z from DL + Pu_z from EV`  
         `Pu_z line = Pu_z point / Lx`, where `Lx` is the abutment/pier width along x  
         `Mu_x point = Mux` at the centroid  
         `Mu_x line couple = Mu_x point / Lx`, with unit `kN-m/m`  
