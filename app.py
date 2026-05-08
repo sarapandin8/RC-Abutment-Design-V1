@@ -3049,16 +3049,13 @@ def _add_side_approach_slab_reaction(
     load_y_extents: list[float],
     load_z_extents: list[float],
 ) -> None:
-    if approach_slab.uls_pu_z_kn <= 1e-9:
-        return
-
     face_y = approach_slab.centroid_y_mm
     soil_side = 1.0 if face_y >= 0.0 else -1.0
     gap_mm = max(approach_slab.gap_m * 1000.0, 0.0)
     gap_draw_limit = max(1400.0, height_z_mm * 0.36)
     gap_draw = min(max(gap_mm, 420.0), gap_draw_limit)
     gap_end_y = face_y + soil_side * gap_draw
-    slab_z0 = height_z_mm + max(55.0, bearing_h * 0.32)
+    slab_z0 = height_z_mm + max(150.0, bearing_h * 0.85)
     slab_thk = min(max(approach_slab.thickness_m * 1000.0, 75.0), 230.0)
     slab_z1 = slab_z0 + slab_thk
 
@@ -3068,10 +3065,19 @@ def _add_side_approach_slab_reaction(
         x1=max(face_y, gap_end_y),
         y0=slab_z0,
         y1=slab_z1,
-        fillcolor="#e5e7eb",
-        linecolor="#64748b",
-        opacity=0.82,
+        fillcolor="#fde68a",
+        linecolor="#92400e",
+        opacity=0.88,
         layer="above",
+    )
+    _add_load_tag(
+        fig,
+        x=(face_y + gap_end_y) / 2.0,
+        y=(slab_z0 + slab_z1) / 2.0,
+        text="<b>Approach slab</b>",
+        color="#78350f",
+        xanchor="center",
+        yanchor="middle",
     )
     fig.add_shape(
         type="line",
@@ -3106,15 +3112,26 @@ def _add_side_approach_slab_reaction(
 
     arrow_len = max(520.0, min(980.0, height_z_mm * 0.18))
     arrow_tail_z = slab_z1 + arrow_len
-    _add_load_arrow(
-        fig,
-        x=face_y,
-        y=arrow_tail_z,
-        dx=0.0,
-        dy=-(arrow_tail_z - slab_z0),
-        label="",
-        color="#dc2626",
-    )
+    if approach_slab.uls_pu_z_kn > 1e-9:
+        _add_load_arrow(
+            fig,
+            x=face_y,
+            y=arrow_tail_z,
+            dx=0.0,
+            dy=-(arrow_tail_z - slab_z0),
+            label="",
+            color="#dc2626",
+        )
+    else:
+        fig.add_shape(
+            type="line",
+            layer="above",
+            x0=face_y,
+            y0=slab_z0,
+            x1=face_y,
+            y1=arrow_tail_z,
+            line={"color": "#dc2626", "width": 1.2, "dash": "dot"},
+        )
     label_y = face_y + soil_side * max(gap_draw * 0.58, 520.0)
     _add_load_tag(
         fig,
