@@ -2313,7 +2313,7 @@ def _add_load_tag(
             {
                 "bgcolor": bgcolor,
                 "bordercolor": bordercolor or color,
-                "borderwidth": 1.5,
+                "borderwidth": 0.75,
                 "borderpad": 5,
             }
         )
@@ -3043,10 +3043,14 @@ def _add_side_earth_pressure_diagram(
     if service_live > 1e-9:
         component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
     summary_label_y = y_at(max_len + label_gap + 900.0)
+    summary_label_z = min(
+        max(h_draw * 0.60, resultant_z + max(900.0, height_z_mm * 0.18)),
+        h_draw - max(420.0, height_z_mm * 0.09),
+    )
     _add_load_tag(
         fig,
         x=summary_label_y,
-        y=max(h_draw * 0.72, min(h_draw + max(160.0, height_z_mm * 0.035), height_z_mm + max(220.0, height_z_mm * 0.05))),
+        y=summary_label_z,
         text=(
             "<b>Lateral earth pressure</b><br>"
             f"{earth_pressure.combination}<br>"
@@ -3063,7 +3067,7 @@ def _add_side_earth_pressure_diagram(
 
     outer_y = y_at(max_len + label_gap + 1280.0)
     load_y_extents.extend([face_y, y_at(max_len), outer_y])
-    load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z])
+    load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z, summary_label_z])
 
 
 def _add_side_approach_slab_reaction(
@@ -3113,19 +3117,6 @@ def _add_side_approach_slab_reaction(
         bordercolor="#92400e",
         bgcolor="rgba(255,251,235,0.96)",
     )
-    if seat_mm > 1.0:
-        _add_load_tag(
-            fig,
-            x=(seat_inner_y + soil_face_y) / 2.0,
-            y=slab_z1 + max(80.0, height_z_mm * 0.016),
-            text=f"seat = {approach_slab.seat_length_m:.2f} m",
-            color="#78350f",
-            xanchor="center",
-            yanchor="bottom",
-            boxed=True,
-            bordercolor="#92400e",
-            bgcolor="rgba(255,251,235,0.96)",
-        )
     fig.add_shape(
         type="line",
         layer="above",
@@ -3164,8 +3155,6 @@ def _add_side_approach_slab_reaction(
         color="#475569",
         xanchor="center",
         yanchor="bottom",
-        boxed=True,
-        bordercolor="#475569",
     )
 
     arrow_len = max(520.0, min(980.0, height_z_mm * 0.18))
@@ -3190,8 +3179,8 @@ def _add_side_approach_slab_reaction(
             y1=arrow_tail_z,
             line={"color": "#dc2626", "width": 1.2, "dash": "dot"},
         )
-    label_y = soil_face_y + soil_side * min(max(length_draw * 0.45, 700.0), max(length_draw - 220.0, 700.0))
-    label_z = slab_z0 - max(330.0, height_z_mm * 0.065)
+    label_y = slab_end_y + soil_side * max(260.0, length_draw * 0.08)
+    label_z = slab_z0 - max(220.0, height_z_mm * 0.045)
     _add_load_tag(
         fig,
         x=label_y,
@@ -3201,7 +3190,7 @@ def _add_side_approach_slab_reaction(
             f"Service DC+DW = {approach_slab.service_dc_kn + approach_slab.service_dw_kn:.0f} kN<br>"
             f"Service LL = {approach_slab.service_ll_kn:.0f} kN<br>"
             f"ULS Pu_z = {approach_slab.uls_pu_z_kn:.0f} kN<br>"
-            f"y_AS = {approach_slab.centroid_y_mm:+.0f} mm at seat centroid<br>"
+            f"y_AS = {approach_slab.centroid_y_mm:+.0f} mm<br>"
             f"Mux = {approach_slab.uls_mux_knm:+.0f} kN-m"
         ),
         color="#991b1b",
@@ -3211,7 +3200,17 @@ def _add_side_approach_slab_reaction(
         bordercolor="#991b1b",
     )
 
-    load_y_extents.extend([seat_inner_y, soil_face_y, slab_end_y, gap_end_y, label_y, approach_slab.centroid_y_mm])
+    load_y_extents.extend(
+        [
+            seat_inner_y,
+            soil_face_y,
+            slab_end_y,
+            gap_end_y,
+            label_y,
+            label_y + soil_side * max(1400.0, length_draw * 0.20),
+            approach_slab.centroid_y_mm,
+        ]
+    )
     load_z_extents.extend([label_z, slab_z0, slab_z1, dim_z, arrow_tail_z])
 
 
