@@ -95,6 +95,12 @@ APPROACH_SLAB_LIVE_LOAD_PRESETS = {
     "Rail - LM71 UDL only (80 kN/m per track)": {"type": "line", "q_kpa": 0.0, "q_line_kn_m": 80.0, "default_width_m": 0.0},
     "Rail - custom line load per track": {"type": "line_custom", "q_kpa": 0.0, "q_line_kn_m": 80.0, "default_width_m": 0.0},
 }
+APPROACH_SLAB_FACTOR_PRESETS = {
+    "AASHTO LRFD Strength I": {"dc": 1.25, "dw": 1.50, "ll": 1.75},
+    "EN / Eurocode STR/GEO DA1 C1": {"dc": 1.35, "dw": 1.35, "ll": 1.35},
+    "EN / Eurocode STR/GEO DA1 C2": {"dc": 1.00, "dw": 1.00, "ll": 1.30},
+    "Custom factors": {"dc": None, "dw": None, "ll": None},
+}
 
 ALPHA_GUIDANCE_MD = """
 **Load contour alpha guide**
@@ -3513,6 +3519,7 @@ PROJECT_SETTING_DEFAULTS = {
     "approach_slab_track_count": 1,
     "approach_slab_point_load_kn": 0.0,
     "approach_slab_point_load_y_m": 0.0,
+    "approach_slab_factor_code": "AASHTO LRFD Strength I",
     "approach_slab_dc_factor": 1.25,
     "approach_slab_dw_factor": 1.50,
     "approach_slab_ll_factor": 1.75,
@@ -4165,13 +4172,55 @@ with st.sidebar:
                 step=0.10,
                 key="approach_slab_point_load_y_m",
             )
+            approach_slab_factor_code = st.selectbox(
+                "Approach slab load factor code",
+                list(APPROACH_SLAB_FACTOR_PRESETS),
+                key="approach_slab_factor_code",
+                help="Select the load-factor set for approach slab reactions. Use Custom factors for project-specific combinations.",
+            )
+            factor_preset = APPROACH_SLAB_FACTOR_PRESETS[approach_slab_factor_code]
+            factor_values = {
+                "dc": float(factor_preset["dc"] if factor_preset["dc"] is not None else st.session_state.get("approach_slab_dc_factor", 1.25)),
+                "dw": float(factor_preset["dw"] if factor_preset["dw"] is not None else st.session_state.get("approach_slab_dw_factor", 1.50)),
+                "ll": float(factor_preset["ll"] if factor_preset["ll"] is not None else st.session_state.get("approach_slab_ll_factor", 1.75)),
+            }
             factor_cols = st.columns(3)
             with factor_cols[0]:
-                approach_slab_dc_factor = st.number_input("gamma_AS_DC", min_value=0.0, max_value=3.0, value=1.25, step=0.05, key="approach_slab_dc_factor")
+                approach_slab_dc_factor = st.number_input(
+                    "gamma_AS_DC",
+                    min_value=0.0,
+                    max_value=3.0,
+                    value=factor_values["dc"],
+                    step=0.05,
+                    key="approach_slab_dc_factor",
+                    disabled=approach_slab_factor_code != "Custom factors",
+                )
             with factor_cols[1]:
-                approach_slab_dw_factor = st.number_input("gamma_AS_DW", min_value=0.0, max_value=3.0, value=1.50, step=0.05, key="approach_slab_dw_factor")
+                approach_slab_dw_factor = st.number_input(
+                    "gamma_AS_DW",
+                    min_value=0.0,
+                    max_value=3.0,
+                    value=factor_values["dw"],
+                    step=0.05,
+                    key="approach_slab_dw_factor",
+                    disabled=approach_slab_factor_code != "Custom factors",
+                )
             with factor_cols[2]:
-                approach_slab_ll_factor = st.number_input("gamma_AS_LL", min_value=0.0, max_value=3.0, value=1.75, step=0.05, key="approach_slab_ll_factor")
+                approach_slab_ll_factor = st.number_input(
+                    "gamma_AS_LL",
+                    min_value=0.0,
+                    max_value=3.0,
+                    value=factor_values["ll"],
+                    step=0.05,
+                    key="approach_slab_ll_factor",
+                    disabled=approach_slab_factor_code != "Custom factors",
+                )
+            st.caption(
+                f"{approach_slab_factor_code}: "
+                f"gamma_DC = {approach_slab_dc_factor:.2f}, "
+                f"gamma_DW = {approach_slab_dw_factor:.2f}, "
+                f"gamma_LL = {approach_slab_ll_factor:.2f}."
+            )
             approach_slab_ll_replaces_surcharge = st.checkbox(
                 "Do not also apply traffic live load surcharge q_LS when approach slab LL reaction is included",
                 value=True,
@@ -4248,6 +4297,7 @@ with st.sidebar:
         approach_slab_track_count = 0
         approach_slab_point_load_kn = 0.0
         approach_slab_point_load_y_m = 0.0
+        approach_slab_factor_code = "AASHTO LRFD Strength I"
         approach_slab_dc_factor = 1.25
         approach_slab_dw_factor = 1.50
         approach_slab_ll_factor = 1.75
@@ -5020,6 +5070,10 @@ with tabs[3]:
         The approach slab reaction is placed at the backfill-side seat line of the abutment, so it adds `Pu_z` and
         eccentric `Mu_x` to the pile-cap summary. If the approach slab live load is included as vertical reaction,
         traffic live-load surcharge `q_LS` can be suppressed to avoid double counting the same live load.
+
+        Approach slab reaction load factors can be selected separately as `AASHTO LRFD Strength I`, `EN / Eurocode
+        DA1 C1`, `EN / Eurocode DA1 C2`, or `Custom factors`. This lets the pile-cap reaction summary follow the
+        selected design basis instead of always using AASHTO-style factors.
 
         Earth pressure is calculated with the selected design `phi` value:
 
