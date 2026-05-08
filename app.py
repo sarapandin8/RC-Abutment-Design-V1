@@ -69,6 +69,32 @@ TRAFFIC_SURCHARGE_PRESETS = {
     "Custom h_eq": {"type": "h_eq", "q_kpa": None},
     "Custom q_LS": {"type": "q_custom", "q_kpa": None},
 }
+APPROACH_SLAB_GAP_PRESETS = [
+    "0.0 m - full soil contact / no bridge action",
+    "1.0 m - good compacted backfill",
+    "2.0 m - moderate settlement or local void",
+    "3.0 m - poor or uncertain backfill",
+    "Full slab length - conservative no soil support",
+    "Custom",
+]
+APPROACH_SLAB_LIVE_LOAD_PRESETS = {
+    "None": {"type": "none", "q_kpa": 0.0, "q_line_kn_m": 0.0, "default_width_m": 0.0},
+    "Road - AASHTO HL-93 lane load UDL only (3.1 kPa over 3 m lane)": {
+        "type": "area",
+        "q_kpa": 9.3 / 3.0,
+        "q_line_kn_m": 0.0,
+        "default_width_m": 3.0,
+    },
+    "Road - EN LM1 lane 1 UDL only (9.0 kPa over 3 m lane)": {
+        "type": "area",
+        "q_kpa": 9.0,
+        "q_line_kn_m": 0.0,
+        "default_width_m": 3.0,
+    },
+    "Road - custom uniform pressure": {"type": "area_custom", "q_kpa": 10.0, "q_line_kn_m": 0.0, "default_width_m": 3.0},
+    "Rail - LM71 UDL only (80 kN/m per track)": {"type": "line", "q_kpa": 0.0, "q_line_kn_m": 80.0, "default_width_m": 0.0},
+    "Rail - custom line load per track": {"type": "line_custom", "q_kpa": 0.0, "q_line_kn_m": 80.0, "default_width_m": 0.0},
+}
 
 ALPHA_GUIDANCE_MD = """
 **Load contour alpha guide**
@@ -135,6 +161,35 @@ class BackfillVerticalLoadSummary:
     gamma_soil_kn_m3: float
     service_ev_kn: float
     factor: float
+    uls_pu_z_kn: float
+    centroid_y_mm: float
+    uls_mux_knm: float
+
+
+@dataclass(frozen=True)
+class ApproachSlabReactionSummary:
+    length_y_m: float
+    width_x_m: float
+    gap_m: float
+    thickness_m: float
+    superimposed_dead_kpa: float
+    live_load_preset: str
+    live_load_basis: str
+    live_loaded_width_m: float
+    track_count: int
+    point_load_kn: float
+    point_load_y_m: float
+    service_dc_kn: float
+    service_dw_kn: float
+    service_ll_uniform_kn: float
+    service_ll_point_kn: float
+    service_ll_kn: float
+    dc_factor: float
+    dw_factor: float
+    ll_factor: float
+    uls_dc_kn: float
+    uls_dw_kn: float
+    uls_ll_kn: float
     uls_pu_z_kn: float
     centroid_y_mm: float
     uls_mux_knm: float
@@ -421,6 +476,110 @@ def backfill_vertical_load_summary(
     )
 
 
+def approach_slab_gap_from_preset(preset: str, slab_length_m: float, custom_gap_m: float) -> float:
+    if preset.startswith("0.0"):
+        return 0.0
+    if preset.startswith("1.0"):
+        return min(1.0, max(float(slab_length_m), 0.0))
+    if preset.startswith("2.0"):
+        return min(2.0, max(float(slab_length_m), 0.0))
+    if preset.startswith("3.0"):
+        return min(3.0, max(float(slab_length_m), 0.0))
+    if preset.startswith("Full slab length"):
+        return max(float(slab_length_m), 0.0)
+    return min(max(float(custom_gap_m), 0.0), max(float(slab_length_m), 0.0))
+
+
+def approach_slab_reaction_summary(
+    *,
+    slab_length_y_m: float,
+    slab_width_x_m: float,
+    slab_thickness_m: float,
+    concrete_unit_weight_kn_m3: float,
+    superimposed_dead_kpa: float,
+    gap_m: float,
+    live_load_preset: str,
+    live_q_kpa: float,
+    live_loaded_width_m: float,
+    live_line_load_kn_m: float,
+    track_count: int,
+    point_load_kn: float,
+    point_load_y_m: float,
+    dc_factor: float,
+    dw_factor: float,
+    ll_factor: float,
+    depth_y_mm: float,
+    earth_pressure_direction: str,
+) -> ApproachSlabReactionSummary:
+    length_m = max(float(slab_length_y_m), 0.0)
+    width_m = max(float(slab_width_x_m), 0.0)
+    gap = min(max(float(gap_m), 0.0), length_m)
+    thickness = max(float(slab_thickness_m), 0.0)
+    q_dc = max(float(concrete_unit_weight_kn_m3), 0.0) * thickness
+    q_dw = max(float(superimposed_dead_kpa), 0.0)
+    service_dc = 0.5 * q_dc * gap * width_m
+    service_dw = 0.5 * q_dw * gap * width_m
+
+    preset = APPROACH_SLAB_LIVE_LOAD_PRESETS.get(live_load_preset, APPROACH_SLAB_LIVE_LOAD_PRESETS["None"])
+    live_type = str(preset["type"])
+    loaded_width = min(max(float(live_loaded_width_m), 0.0), width_m)
+    tracks = max(int(track_count), 0)
+    q_ll = max(float(live_q_kpa), 0.0)
+    line_ll = max(float(live_line_load_kn_m), 0.0)
+    if live_type in {"area", "area_custom"}:
+        service_ll_uniform = 0.5 * q_ll * gap * loaded_width
+        live_basis = f"0.5 x q_LL x l_gap x loaded width ({loaded_width:.2f} m)"
+    elif live_type in {"line", "line_custom"}:
+        service_ll_uniform = 0.5 * line_ll * gap * tracks
+        live_basis = f"0.5 x q_line x l_gap x {tracks} track(s)"
+        loaded_width = 0.0
+    else:
+        service_ll_uniform = 0.0
+        live_basis = "No approach slab live load"
+
+    point_y = max(float(point_load_y_m), 0.0)
+    point_load = max(float(point_load_kn), 0.0)
+    if gap > 1e-9 and point_y <= gap:
+        service_ll_point = point_load * (gap - point_y) / gap
+    else:
+        service_ll_point = 0.0
+
+    service_ll = service_ll_uniform + service_ll_point
+    uls_dc = max(float(dc_factor), 0.0) * service_dc
+    uls_dw = max(float(dw_factor), 0.0) * service_dw
+    uls_ll = max(float(ll_factor), 0.0) * service_ll
+    uls_pu = uls_dc + uls_dw + uls_ll
+    soil_side_sign = -1.0 if str(earth_pressure_direction).strip().startswith("+") else 1.0
+    centroid_y_mm = soil_side_sign * max(float(depth_y_mm), 0.0) / 2.0
+    return ApproachSlabReactionSummary(
+        length_y_m=length_m,
+        width_x_m=width_m,
+        gap_m=gap,
+        thickness_m=thickness,
+        superimposed_dead_kpa=q_dw,
+        live_load_preset=live_load_preset,
+        live_load_basis=live_basis,
+        live_loaded_width_m=loaded_width,
+        track_count=tracks,
+        point_load_kn=point_load,
+        point_load_y_m=point_y,
+        service_dc_kn=service_dc,
+        service_dw_kn=service_dw,
+        service_ll_uniform_kn=service_ll_uniform,
+        service_ll_point_kn=service_ll_point,
+        service_ll_kn=service_ll,
+        dc_factor=max(float(dc_factor), 0.0),
+        dw_factor=max(float(dw_factor), 0.0),
+        ll_factor=max(float(ll_factor), 0.0),
+        uls_dc_kn=uls_dc,
+        uls_dw_kn=uls_dw,
+        uls_ll_kn=uls_ll,
+        uls_pu_z_kn=uls_pu,
+        centroid_y_mm=centroid_y_mm,
+        uls_mux_knm=-centroid_y_mm * uls_pu / 1000.0,
+    )
+
+
 def earth_pressure_coefficient(phi_deg: float, pressure_mode: str) -> float:
     phi_rad = math.radians(min(max(float(phi_deg), 0.0), 45.0))
     sin_phi = math.sin(phi_rad)
@@ -655,12 +814,14 @@ def pilecap_base_force_summary_table(
     width_x_mm: float,
     dead_load: DeadLoadSummary | None = None,
     backfill_vertical: BackfillVerticalLoadSummary | None = None,
+    approach_slab: ApproachSlabReactionSummary | None = None,
     earth_pressure: EarthPressureSummary | None = None,
 ) -> pd.DataFrame:
     width_m = max(float(width_x_mm) / 1000.0, 1e-9)
     dead_load_pu_kn = dead_load.uls_pu_z_kn if dead_load is not None else 0.0
     backfill_pu_kn = backfill_vertical.uls_pu_z_kn if backfill_vertical is not None else 0.0
-    total_pu_kn = resultant.pu_kn + dead_load_pu_kn + backfill_pu_kn
+    approach_slab_pu_kn = approach_slab.uls_pu_z_kn if approach_slab is not None else 0.0
+    total_pu_kn = resultant.pu_kn + dead_load_pu_kn + backfill_pu_kn + approach_slab_pu_kn
     rows = [
         {
             "Resultant for pile cap": "Pu_z from bearings",
@@ -703,11 +864,45 @@ def pilecap_base_force_summary_table(
                 },
             ]
         )
+    if approach_slab is not None:
+        rows.extend(
+            [
+                {
+                    "Resultant for pile cap": "Approach slab DC reaction",
+                    "Point at centroid": f"{approach_slab.service_dc_kn:,.2f} kN",
+                    "Linearized over x width": f"{approach_slab.service_dc_kn / width_m:,.2f} kN/m",
+                    "Basis": "0.5 x gamma_c x t_slab x l_gap x B_slab",
+                },
+                {
+                    "Resultant for pile cap": "Approach slab superimposed DW reaction",
+                    "Point at centroid": f"{approach_slab.service_dw_kn:,.2f} kN",
+                    "Linearized over x width": f"{approach_slab.service_dw_kn / width_m:,.2f} kN/m",
+                    "Basis": "0.5 x q_DW x l_gap x B_slab",
+                },
+                {
+                    "Resultant for pile cap": "Approach slab LL reaction",
+                    "Point at centroid": f"{approach_slab.service_ll_kn:,.2f} kN",
+                    "Linearized over x width": f"{approach_slab.service_ll_kn / width_m:,.2f} kN/m",
+                    "Basis": approach_slab.live_load_basis,
+                },
+                {
+                    "Resultant for pile cap": "Pu_z from factored approach slab",
+                    "Point at centroid": f"{approach_slab.uls_pu_z_kn:,.2f} kN",
+                    "Linearized over x width": f"{approach_slab.uls_pu_z_kn / width_m:,.2f} kN/m",
+                    "Basis": (
+                        f"{approach_slab.dc_factor:.2f}DC + {approach_slab.dw_factor:.2f}DW "
+                        f"+ {approach_slab.ll_factor:.2f}LL"
+                    ),
+                },
+            ]
+        )
     pu_basis = ["bearing Pu_z"]
     if dead_load is not None:
         pu_basis.append("self-weight DL")
     if backfill_vertical is not None:
         pu_basis.append("backfill EV")
+    if approach_slab is not None:
+        pu_basis.append("approach slab reaction")
     rows.append(
         {
             "Resultant for pile cap": "Total Pu_z for pile cap ULS",
@@ -780,7 +975,16 @@ def pilecap_base_force_summary_table(
                 "Basis": f"-y_EV x Pu_EV / 1000, y_EV = {backfill_vertical.centroid_y_mm:,.0f} mm",
             }
         )
-    if earth_pressure is not None or backfill_vertical is not None:
+    if approach_slab is not None:
+        rows.append(
+            {
+                "Resultant for pile cap": "Mu_x from approach slab reaction",
+                "Point at centroid": f"{approach_slab.uls_mux_knm:,.2f} kN-m",
+                "Linearized over x width": f"{approach_slab.uls_mux_knm / width_m:,.2f} kN-m/m",
+                "Basis": f"-y_AS x Pu_AS / 1000, y_AS = {approach_slab.centroid_y_mm:,.0f} mm",
+            }
+        )
+    if earth_pressure is not None or backfill_vertical is not None or approach_slab is not None:
         total_mux_knm = resultant.mux_knm
         mux_basis = ["bearing Mu_x"]
         if earth_pressure is not None:
@@ -789,6 +993,9 @@ def pilecap_base_force_summary_table(
         if backfill_vertical is not None:
             total_mux_knm += backfill_vertical.uls_mux_knm
             mux_basis.append("backfill EV eccentricity")
+        if approach_slab is not None:
+            total_mux_knm += approach_slab.uls_mux_knm
+            mux_basis.append("approach slab eccentricity")
         rows.append(
             {
                 "Resultant for pile cap": "Total Mu_x for pile cap ULS",
@@ -3287,11 +3494,29 @@ PROJECT_SETTING_DEFAULTS = {
     "concrete_unit_weight_kn_m3": 24.0,
     "include_earth_pressure": True,
     "include_backfill_ev": True,
+    "include_approach_slab_reaction": True,
     "earth_load_code": "AASHTO LRFD Strength I",
     "earth_backfill_height_m": 4.5,
     "backfill_ev_width_m": 0.50,
     "backfill_ev_height_m": 4.5,
     "backfill_ev_factor": BACKFILL_EV_FACTOR,
+    "approach_slab_length_y_m": 10.0,
+    "approach_slab_width_x_m": 9.0,
+    "approach_slab_thickness_m": 0.25,
+    "approach_slab_superimposed_dead_kpa": 3.0,
+    "approach_slab_gap_preset": "2.0 m - moderate settlement or local void",
+    "approach_slab_gap_custom_m": 2.0,
+    "approach_slab_ll_preset": "Road - AASHTO HL-93 lane load UDL only (3.1 kPa over 3 m lane)",
+    "approach_slab_ll_q_kpa": 3.10,
+    "approach_slab_ll_loaded_width_m": 3.0,
+    "approach_slab_ll_line_load_kn_m": 80.0,
+    "approach_slab_track_count": 1,
+    "approach_slab_point_load_kn": 0.0,
+    "approach_slab_point_load_y_m": 0.0,
+    "approach_slab_dc_factor": 1.25,
+    "approach_slab_dw_factor": 1.50,
+    "approach_slab_ll_factor": 1.75,
+    "approach_slab_ll_replaces_surcharge": True,
     "soil_preset": "Thailand general backfill",
     "earth_gamma_soil_custom_kn_m3": 18.0,
     "earth_phi_custom_deg": 30.0,
@@ -3784,6 +4009,179 @@ with st.sidebar:
             st.caption(
                 "Preliminary EV area = Lx x b_EV. The centroid is placed at the middle of b_EV on the backfill side of the abutment."
             )
+        with st.expander("Approach slab reaction - soil supported mode", expanded=True):
+            include_approach_slab_reaction = st.checkbox(
+                "Include approach slab reaction on abutment / pile cap",
+                value=True,
+                key="include_approach_slab_reaction",
+            )
+            approach_slab_length_y_m = st.number_input(
+                "Approach slab length along y (m)",
+                min_value=0.0,
+                max_value=50.0,
+                value=float(st.session_state.get("approach_slab_length_y_m", 10.0)),
+                step=0.10,
+                key="approach_slab_length_y_m",
+            )
+            approach_slab_width_x_m = st.number_input(
+                "Approach slab width along x (m)",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(st.session_state.get("approach_slab_width_x_m", width_x_mm / 1000.0)),
+                step=0.10,
+                key="approach_slab_width_x_m",
+                help="Usually equals abutment width, but may be adjusted for staged construction or partial slab width.",
+            )
+            approach_slab_thickness_m = st.number_input(
+                "Approach slab thickness (m)",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(st.session_state.get("approach_slab_thickness_m", 0.25)),
+                step=0.01,
+                key="approach_slab_thickness_m",
+            )
+            approach_slab_superimposed_dead_kpa = st.number_input(
+                "Superimposed dead load on slab q_DW (kPa)",
+                min_value=0.0,
+                max_value=200.0,
+                value=float(st.session_state.get("approach_slab_superimposed_dead_kpa", 3.0)),
+                step=0.5,
+                key="approach_slab_superimposed_dead_kpa",
+                help="Use for asphalt, waterproofing, track slab, ballast, rail components, or other permanent loads carried by the approach slab.",
+            )
+            approach_slab_gap_preset = st.selectbox(
+                "Recommended effective unsupported length l_gap",
+                APPROACH_SLAB_GAP_PRESETS,
+                key="approach_slab_gap_preset",
+                help="Mode 1 assumes only the slab length over the settlement gap bridges to the abutment. Soil-supported parts are not sent as abutment reaction.",
+            )
+            approach_slab_gap_custom_m = st.number_input(
+                "custom l_gap (m)",
+                min_value=0.0,
+                max_value=max(50.0, float(approach_slab_length_y_m)),
+                value=float(st.session_state.get("approach_slab_gap_custom_m", 2.0)),
+                step=0.10,
+                key="approach_slab_gap_custom_m",
+                disabled=approach_slab_gap_preset != "Custom",
+            )
+            approach_slab_gap_m = approach_slab_gap_from_preset(
+                approach_slab_gap_preset,
+                approach_slab_length_y_m,
+                approach_slab_gap_custom_m,
+            )
+            st.metric("l_gap used", f"{approach_slab_gap_m:,.2f} m")
+
+            approach_slab_ll_preset = st.selectbox(
+                "Approach slab live load model",
+                list(APPROACH_SLAB_LIVE_LOAD_PRESETS),
+                key="approach_slab_ll_preset",
+                help="Presets are preliminary UDL components only. Add axle or concentrated reaction below when it governs.",
+            )
+            ll_preset = APPROACH_SLAB_LIVE_LOAD_PRESETS[approach_slab_ll_preset]
+            ll_type = str(ll_preset["type"])
+            if ll_type == "area":
+                approach_slab_ll_q_kpa = float(ll_preset["q_kpa"])
+                st.metric("q_LL preset", f"{approach_slab_ll_q_kpa:,.2f} kPa")
+                approach_slab_ll_loaded_width_m = st.number_input(
+                    "LL loaded width along x (m)",
+                    min_value=0.0,
+                    max_value=max(100.0, float(approach_slab_width_x_m)),
+                    value=float(st.session_state.get("approach_slab_ll_loaded_width_m", ll_preset["default_width_m"])),
+                    step=0.10,
+                    key="approach_slab_ll_loaded_width_m",
+                )
+                approach_slab_ll_line_load_kn_m = 0.0
+                approach_slab_track_count = 0
+            elif ll_type == "area_custom":
+                approach_slab_ll_q_kpa = st.number_input(
+                    "q_LL on approach slab (kPa)",
+                    min_value=0.0,
+                    max_value=500.0,
+                    value=float(st.session_state.get("approach_slab_ll_q_kpa", ll_preset["q_kpa"])),
+                    step=0.5,
+                    key="approach_slab_ll_q_kpa",
+                )
+                approach_slab_ll_loaded_width_m = st.number_input(
+                    "LL loaded width along x (m)",
+                    min_value=0.0,
+                    max_value=max(100.0, float(approach_slab_width_x_m)),
+                    value=float(st.session_state.get("approach_slab_ll_loaded_width_m", ll_preset["default_width_m"])),
+                    step=0.10,
+                    key="approach_slab_ll_loaded_width_m",
+                )
+                approach_slab_ll_line_load_kn_m = 0.0
+                approach_slab_track_count = 0
+            elif ll_type == "line":
+                approach_slab_ll_line_load_kn_m = float(ll_preset["q_line_kn_m"])
+                st.metric("q_LL line preset", f"{approach_slab_ll_line_load_kn_m:,.2f} kN/m/track")
+                approach_slab_track_count = st.number_input(
+                    "Number of loaded tracks",
+                    min_value=0,
+                    max_value=10,
+                    value=int(st.session_state.get("approach_slab_track_count", 1)),
+                    step=1,
+                    key="approach_slab_track_count",
+                )
+                approach_slab_ll_q_kpa = 0.0
+                approach_slab_ll_loaded_width_m = 0.0
+            elif ll_type == "line_custom":
+                approach_slab_ll_line_load_kn_m = st.number_input(
+                    "q_LL line load per track (kN/m)",
+                    min_value=0.0,
+                    max_value=500.0,
+                    value=float(st.session_state.get("approach_slab_ll_line_load_kn_m", ll_preset["q_line_kn_m"])),
+                    step=5.0,
+                    key="approach_slab_ll_line_load_kn_m",
+                )
+                approach_slab_track_count = st.number_input(
+                    "Number of loaded tracks",
+                    min_value=0,
+                    max_value=10,
+                    value=int(st.session_state.get("approach_slab_track_count", 1)),
+                    step=1,
+                    key="approach_slab_track_count",
+                )
+                approach_slab_ll_q_kpa = 0.0
+                approach_slab_ll_loaded_width_m = 0.0
+            else:
+                approach_slab_ll_q_kpa = 0.0
+                approach_slab_ll_loaded_width_m = 0.0
+                approach_slab_ll_line_load_kn_m = 0.0
+                approach_slab_track_count = 0
+            approach_slab_point_load_kn = st.number_input(
+                "Additional LL point/axle load in gap (kN)",
+                min_value=0.0,
+                max_value=5000.0,
+                value=float(st.session_state.get("approach_slab_point_load_kn", 0.0)),
+                step=10.0,
+                key="approach_slab_point_load_kn",
+                help="Optional total concentrated load within l_gap. Reaction uses P x (l_gap - y) / l_gap.",
+            )
+            approach_slab_point_load_y_m = st.number_input(
+                "Point/axle load distance from abutment y (m)",
+                min_value=0.0,
+                max_value=max(50.0, float(approach_slab_length_y_m)),
+                value=float(st.session_state.get("approach_slab_point_load_y_m", 0.0)),
+                step=0.10,
+                key="approach_slab_point_load_y_m",
+            )
+            factor_cols = st.columns(3)
+            with factor_cols[0]:
+                approach_slab_dc_factor = st.number_input("gamma_AS_DC", min_value=0.0, max_value=3.0, value=1.25, step=0.05, key="approach_slab_dc_factor")
+            with factor_cols[1]:
+                approach_slab_dw_factor = st.number_input("gamma_AS_DW", min_value=0.0, max_value=3.0, value=1.50, step=0.05, key="approach_slab_dw_factor")
+            with factor_cols[2]:
+                approach_slab_ll_factor = st.number_input("gamma_AS_LL", min_value=0.0, max_value=3.0, value=1.75, step=0.05, key="approach_slab_ll_factor")
+            approach_slab_ll_replaces_surcharge = st.checkbox(
+                "Do not also apply traffic live load surcharge q_LS when approach slab LL reaction is included",
+                value=True,
+                key="approach_slab_ll_replaces_surcharge",
+                help="Prevents double counting the same vehicle/train live load as both vertical slab reaction and lateral surcharge.",
+            )
+            if include_approach_slab_reaction and approach_slab_ll_replaces_surcharge and approach_slab_ll_preset != "None":
+                traffic_q_kpa = 0.0
+                traffic_h_eq_m = 0.0
+                st.info("Traffic live load surcharge q_LS is set to 0.0 because approach slab LL reaction is included.")
         stem_bar_dia_mm = st.selectbox(
             "Stem vertical bar diameter for spacing guide",
             REBAR_DIAMETERS_MM,
@@ -3834,9 +4232,26 @@ with st.sidebar:
     else:
         include_earth_pressure = False
         include_backfill_ev = False
+        include_approach_slab_reaction = False
         backfill_ev_width_m = 0.0
         backfill_ev_height_m = 0.0
         backfill_ev_factor = BACKFILL_EV_FACTOR
+        approach_slab_length_y_m = 0.0
+        approach_slab_width_x_m = 0.0
+        approach_slab_thickness_m = 0.0
+        approach_slab_superimposed_dead_kpa = 0.0
+        approach_slab_gap_m = 0.0
+        approach_slab_ll_preset = "None"
+        approach_slab_ll_q_kpa = 0.0
+        approach_slab_ll_loaded_width_m = 0.0
+        approach_slab_ll_line_load_kn_m = 0.0
+        approach_slab_track_count = 0
+        approach_slab_point_load_kn = 0.0
+        approach_slab_point_load_y_m = 0.0
+        approach_slab_dc_factor = 1.25
+        approach_slab_dw_factor = 1.50
+        approach_slab_ll_factor = 1.75
+        approach_slab_ll_replaces_surcharge = False
         st.header("Earth Pressure")
         st.info("Wall Pier mode is selected, so backfill earth pressure inputs are hidden and excluded from the calculations.")
 
@@ -3987,6 +4402,30 @@ backfill_vertical_result = (
         earth_pressure_direction=earth_pressure_direction,
     )
     if include_backfill_ev
+    else None
+)
+approach_slab_result = (
+    approach_slab_reaction_summary(
+        slab_length_y_m=approach_slab_length_y_m,
+        slab_width_x_m=approach_slab_width_x_m,
+        slab_thickness_m=approach_slab_thickness_m,
+        concrete_unit_weight_kn_m3=concrete_unit_weight_kn_m3,
+        superimposed_dead_kpa=approach_slab_superimposed_dead_kpa,
+        gap_m=approach_slab_gap_m,
+        live_load_preset=approach_slab_ll_preset,
+        live_q_kpa=approach_slab_ll_q_kpa,
+        live_loaded_width_m=approach_slab_ll_loaded_width_m,
+        live_line_load_kn_m=approach_slab_ll_line_load_kn_m,
+        track_count=int(approach_slab_track_count),
+        point_load_kn=approach_slab_point_load_kn,
+        point_load_y_m=approach_slab_point_load_y_m,
+        dc_factor=approach_slab_dc_factor,
+        dw_factor=approach_slab_dw_factor,
+        ll_factor=approach_slab_ll_factor,
+        depth_y_mm=depth_y_mm,
+        earth_pressure_direction=earth_pressure_direction,
+    )
+    if include_approach_slab_reaction
     else None
 )
 earth_pressure_summaries: list[EarthPressureSummary] = []
@@ -4346,6 +4785,8 @@ with tabs[1]:
         pilecap_load_notes.append("selected lateral earth pressure")
     if backfill_vertical_result is not None:
         pilecap_load_notes.append("vertical backfill EV")
+    if approach_slab_result is not None:
+        pilecap_load_notes.append("approach slab reaction")
     earth_caption = f"and {' plus '.join(pilecap_load_notes)}" if pilecap_load_notes else "with earth/backfill loads excluded"
     st.caption(
         f"Uses all bearing loads transferred to the abutment/pier base centroid, abutment/pier self-weight, "
@@ -4364,6 +4805,12 @@ with tabs[1]:
         ev_cols[1].metric("Service EV", f"{backfill_vertical_result.service_ev_kn:,.2f} kN")
         ev_cols[2].metric("EV factor", f"{backfill_vertical_result.factor:.2f}")
         ev_cols[3].metric("Pu_z from EV", f"{backfill_vertical_result.uls_pu_z_kn:,.2f} kN")
+    if approach_slab_result is not None:
+        as_cols = st.columns(4)
+        as_cols[0].metric("AS l_gap", f"{approach_slab_result.gap_m:,.2f} m")
+        as_cols[1].metric("AS service DC+DW", f"{approach_slab_result.service_dc_kn + approach_slab_result.service_dw_kn:,.2f} kN")
+        as_cols[2].metric("AS service LL", f"{approach_slab_result.service_ll_kn:,.2f} kN")
+        as_cols[3].metric("Pu_z from AS", f"{approach_slab_result.uls_pu_z_kn:,.2f} kN")
     if earth_pressure_result is not None:
         ep_cols = st.columns(4)
         ep_cols[0].metric("Earth K", f"{earth_pressure_result.pressure_coefficient:.3f}", delta=earth_pressure_result.combination, delta_color="off")
@@ -4386,6 +4833,7 @@ with tabs[1]:
             width_x_mm,
             dead_load_summary,
             backfill_vertical_result,
+            approach_slab_result,
             earth_pressure_result,
         ),
         width="stretch",
@@ -4434,6 +4882,15 @@ with tabs[1]:
         )
     else:
         pilecap_note += "Vertical backfill EV is excluded for the selected settings. "
+    if approach_slab_result is not None:
+        pilecap_note += (
+            "Approach slab reaction uses the selected soil-supported l_gap, so only loads over the assumed gap bridge "
+            "to the abutment; soil-supported slab length is not added as abutment reaction. "
+        )
+        if approach_slab_ll_replaces_surcharge:
+            pilecap_note += "Traffic q_LS surcharge is suppressed to avoid double counting the approach slab live load. "
+    else:
+        pilecap_note += "Approach slab reaction is excluded for the selected settings. "
     pilecap_note += (
         "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
         "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
@@ -4548,6 +5005,21 @@ with tabs[3]:
 
         The self-weight is assumed to act at the abutment/pier centroid, so it increases `Pu_z` only and does not
         add `Mu_x`, `Mu_y`, or `Tz`.
+
+        **Approach slab reaction**
+
+        Soil-supported approach slab mode uses an effective unsupported length `l_gap`. Only the slab and live load
+        over this assumed settlement gap are treated as bridging to the abutment:
+
+        `R_DC = 0.5 x gamma_c x t_slab x l_gap x B_slab`  
+        `R_DW = 0.5 x q_DW x l_gap x B_slab`  
+        `R_LL_area = 0.5 x q_LL x l_gap x loaded_width`  
+        `R_LL_line = 0.5 x q_line x l_gap x number_of_tracks`  
+        `R_point = P x (l_gap - y) / l_gap` for optional concentrated load inside the gap
+
+        The approach slab reaction is placed at the backfill-side seat line of the abutment, so it adds `Pu_z` and
+        eccentric `Mu_x` to the pile-cap summary. If the approach slab live load is included as vertical reaction,
+        traffic live-load surcharge `q_LS` can be suppressed to avoid double counting the same live load.
 
         Earth pressure is calculated with the selected design `phi` value:
 
