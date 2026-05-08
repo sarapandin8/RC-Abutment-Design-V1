@@ -179,6 +179,7 @@ class ApproachSlabReactionSummary:
     length_y_m: float
     width_x_m: float
     gap_m: float
+    seat_length_m: float
     thickness_m: float
     superimposed_dead_kpa: float
     live_load_preset: str
@@ -661,6 +662,7 @@ def approach_slab_reaction_summary(
     slab_length_y_m: float,
     slab_width_x_m: float,
     slab_thickness_m: float,
+    seat_length_m: float,
     concrete_unit_weight_kn_m3: float,
     superimposed_dead_kpa: float,
     gap_m: float,
@@ -681,6 +683,7 @@ def approach_slab_reaction_summary(
     width_m = max(float(slab_width_x_m), 0.0)
     gap = min(max(float(gap_m), 0.0), length_m)
     thickness = max(float(slab_thickness_m), 0.0)
+    seat_m = min(max(float(seat_length_m), 0.0), max(float(depth_y_mm), 0.0) / 1000.0)
     q_dc = max(float(concrete_unit_weight_kn_m3), 0.0) * thickness
     q_dw = max(float(superimposed_dead_kpa), 0.0)
     service_dc = 0.5 * q_dc * gap * width_m
@@ -716,11 +719,13 @@ def approach_slab_reaction_summary(
     uls_ll = max(float(ll_factor), 0.0) * service_ll
     uls_pu = uls_dc + uls_dw + uls_ll
     soil_side_sign = -1.0 if str(earth_pressure_direction).strip().startswith("+") else 1.0
-    centroid_y_mm = soil_side_sign * max(float(depth_y_mm), 0.0) / 2.0
+    soil_face_y_mm = soil_side_sign * max(float(depth_y_mm), 0.0) / 2.0
+    centroid_y_mm = soil_face_y_mm - soil_side_sign * seat_m * 1000.0 / 2.0
     return ApproachSlabReactionSummary(
         length_y_m=length_m,
         width_x_m=width_m,
         gap_m=gap,
+        seat_length_m=seat_m,
         thickness_m=thickness,
         superimposed_dead_kpa=q_dw,
         live_load_preset=live_load_preset,
@@ -1147,7 +1152,10 @@ def pilecap_base_force_summary_table(
                 "Resultant for pile cap": "Mu_x from approach slab reaction",
                 "Point at centroid": f"{approach_slab.uls_mux_knm:,.2f} kN-m",
                 "Linearized over x width": f"{approach_slab.uls_mux_knm / width_m:,.2f} kN-m/m",
-                "Basis": f"-y_AS x Pu_AS / 1000, y_AS = {approach_slab.centroid_y_mm:,.0f} mm",
+                "Basis": (
+                    f"-y_AS x Pu_AS / 1000, y_AS = {approach_slab.centroid_y_mm:,.0f} mm "
+                    f"(seat = {approach_slab.seat_length_m:.2f} m)"
+                ),
             }
         )
     if earth_pressure is not None or backfill_vertical is not None or approach_slab is not None:
@@ -2282,21 +2290,34 @@ def _add_load_tag(
     yanchor: str = "middle",
     text_xshift: int = 0,
     text_yshift: int = 0,
+    boxed: bool = False,
+    bordercolor: str | None = None,
+    bgcolor: str = "rgba(255,255,255,0.94)",
 ) -> None:
     if not text:
         return
-    fig.add_annotation(
-        x=x,
-        y=y,
-        text=text,
-        showarrow=False,
-        xanchor=xanchor,
-        yanchor=yanchor,
-        xshift=text_xshift,
-        yshift=text_yshift,
-        align="left",
-        font={"color": color, "size": 9},
-    )
+    annotation = {
+        "x": x,
+        "y": y,
+        "text": text,
+        "showarrow": False,
+        "xanchor": xanchor,
+        "yanchor": yanchor,
+        "xshift": text_xshift,
+        "yshift": text_yshift,
+        "align": "left",
+        "font": {"color": color, "size": 9},
+    }
+    if boxed:
+        annotation.update(
+            {
+                "bgcolor": bgcolor,
+                "bordercolor": bordercolor or color,
+                "borderwidth": 1.5,
+                "borderpad": 5,
+            }
+        )
+    fig.add_annotation(**annotation)
 
 
 def _add_moment_arc(
@@ -3008,6 +3029,8 @@ def _add_side_earth_pressure_diagram(
             color="#92400e",
             xanchor="right" if soil_side < 0.0 else "left",
             yanchor="middle",
+            boxed=True,
+            bordercolor="#92400e",
         )
 
     service_total = service_soil + service_other + service_live
@@ -3019,9 +3042,10 @@ def _add_side_earth_pressure_diagram(
         component_lines.append(f"q surcharge: {service_other:.1f} kN/m @ H/2")
     if service_live > 1e-9:
         component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
+    summary_label_y = y_at(max_len + label_gap + 900.0)
     _add_load_tag(
         fig,
-        x=y_at(max_len + label_gap),
+        x=summary_label_y,
         y=max(h_draw * 0.72, min(h_draw + max(160.0, height_z_mm * 0.035), height_z_mm + max(220.0, height_z_mm * 0.05))),
         text=(
             "<b>Lateral earth pressure</b><br>"
@@ -3033,9 +3057,11 @@ def _add_side_earth_pressure_diagram(
         color="#0f172a",
         xanchor="right" if soil_side < 0.0 else "left",
         yanchor="middle",
+        boxed=True,
+        bordercolor="#334155",
     )
 
-    outer_y = y_at(max_len + label_gap + 280.0)
+    outer_y = y_at(max_len + label_gap + 1280.0)
     load_y_extents.extend([face_y, y_at(max_len), outer_y])
     load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z])
 
@@ -3044,25 +3070,30 @@ def _add_side_approach_slab_reaction(
     fig: go.Figure,
     *,
     approach_slab: ApproachSlabReactionSummary,
+    abut_y: float,
     height_z_mm: float,
     bearing_h: float,
     load_y_extents: list[float],
     load_z_extents: list[float],
 ) -> None:
-    face_y = approach_slab.centroid_y_mm
-    soil_side = 1.0 if face_y >= 0.0 else -1.0
+    soil_side = 1.0 if approach_slab.centroid_y_mm > 0.0 else -1.0
+    soil_face_y = soil_side * abut_y
+    seat_mm = min(max(approach_slab.seat_length_m * 1000.0, 0.0), max(2.0 * abut_y, 0.0))
+    seat_inner_y = soil_face_y - soil_side * seat_mm
     gap_mm = max(approach_slab.gap_m * 1000.0, 0.0)
-    gap_draw_limit = max(1400.0, height_z_mm * 0.36)
-    gap_draw = min(max(gap_mm, 420.0), gap_draw_limit)
-    gap_end_y = face_y + soil_side * gap_draw
-    slab_z0 = height_z_mm + max(150.0, bearing_h * 0.85)
+    length_draw_mm = max(approach_slab.length_y_m * 1000.0 / 3.0, gap_mm, 900.0)
+    length_draw_limit = max(8000.0, height_z_mm * 1.60)
+    length_draw = min(length_draw_mm, length_draw_limit)
+    slab_end_y = soil_face_y + soil_side * length_draw
+    gap_end_y = soil_face_y + soil_side * min(gap_mm, length_draw)
+    slab_z0 = height_z_mm
     slab_thk = min(max(approach_slab.thickness_m * 1000.0, 75.0), 230.0)
     slab_z1 = slab_z0 + slab_thk
 
     _add_rect(
         fig,
-        x0=min(face_y, gap_end_y),
-        x1=max(face_y, gap_end_y),
+        x0=min(seat_inner_y, slab_end_y),
+        x1=max(seat_inner_y, slab_end_y),
         y0=slab_z0,
         y1=slab_z1,
         fillcolor="#fde68a",
@@ -3072,12 +3103,37 @@ def _add_side_approach_slab_reaction(
     )
     _add_load_tag(
         fig,
-        x=(face_y + gap_end_y) / 2.0,
+        x=(soil_face_y + slab_end_y) / 2.0,
         y=(slab_z0 + slab_z1) / 2.0,
-        text="<b>Approach slab</b>",
+        text=f"<b>Approach slab</b><br>L_AS shown = {length_draw / 1000.0:.2f} m",
         color="#78350f",
         xanchor="center",
         yanchor="middle",
+        boxed=True,
+        bordercolor="#92400e",
+        bgcolor="rgba(255,251,235,0.96)",
+    )
+    if seat_mm > 1.0:
+        _add_load_tag(
+            fig,
+            x=(seat_inner_y + soil_face_y) / 2.0,
+            y=slab_z1 + max(80.0, height_z_mm * 0.016),
+            text=f"seat = {approach_slab.seat_length_m:.2f} m",
+            color="#78350f",
+            xanchor="center",
+            yanchor="bottom",
+            boxed=True,
+            bordercolor="#92400e",
+            bgcolor="rgba(255,251,235,0.96)",
+        )
+    fig.add_shape(
+        type="line",
+        layer="above",
+        x0=soil_face_y,
+        y0=slab_z0,
+        x1=soil_face_y,
+        y1=slab_z1,
+        line={"color": "#92400e", "width": 2.0},
     )
     fig.add_shape(
         type="line",
@@ -3093,21 +3149,23 @@ def _add_side_approach_slab_reaction(
     fig.add_shape(
         type="line",
         layer="above",
-        x0=face_y,
+        x0=soil_face_y,
         y0=dim_z,
         x1=gap_end_y,
         y1=dim_z,
         line={"color": "#475569", "width": 1.1, "dash": "dot"},
     )
-    gap_note = " shown compressed" if gap_mm > gap_draw + 1.0 else ""
+    gap_note = " shown clipped" if gap_mm > length_draw + 1.0 else ""
     _add_load_tag(
         fig,
-        x=(face_y + gap_end_y) / 2.0,
+        x=(soil_face_y + gap_end_y) / 2.0,
         y=dim_z + max(80.0, height_z_mm * 0.015),
         text=f"l_gap = {approach_slab.gap_m:.2f} m{gap_note}",
         color="#475569",
         xanchor="center",
         yanchor="bottom",
+        boxed=True,
+        bordercolor="#475569",
     )
 
     arrow_len = max(520.0, min(980.0, height_z_mm * 0.18))
@@ -3115,7 +3173,7 @@ def _add_side_approach_slab_reaction(
     if approach_slab.uls_pu_z_kn > 1e-9:
         _add_load_arrow(
             fig,
-            x=face_y,
+            x=approach_slab.centroid_y_mm,
             y=arrow_tail_z,
             dx=0.0,
             dy=-(arrow_tail_z - slab_z0),
@@ -3126,32 +3184,35 @@ def _add_side_approach_slab_reaction(
         fig.add_shape(
             type="line",
             layer="above",
-            x0=face_y,
+            x0=approach_slab.centroid_y_mm,
             y0=slab_z0,
-            x1=face_y,
+            x1=approach_slab.centroid_y_mm,
             y1=arrow_tail_z,
             line={"color": "#dc2626", "width": 1.2, "dash": "dot"},
         )
-    label_y = face_y + soil_side * max(gap_draw * 0.58, 520.0)
+    label_y = soil_face_y + soil_side * min(max(length_draw * 0.45, 700.0), max(length_draw - 220.0, 700.0))
+    label_z = slab_z0 - max(330.0, height_z_mm * 0.065)
     _add_load_tag(
         fig,
         x=label_y,
-        y=arrow_tail_z - arrow_len * 0.30,
+        y=label_z,
         text=(
             "<b>Approach slab reaction</b><br>"
             f"Service DC+DW = {approach_slab.service_dc_kn + approach_slab.service_dw_kn:.0f} kN<br>"
             f"Service LL = {approach_slab.service_ll_kn:.0f} kN<br>"
             f"ULS Pu_z = {approach_slab.uls_pu_z_kn:.0f} kN<br>"
-            f"y_AS = {approach_slab.centroid_y_mm:+.0f} mm, "
+            f"y_AS = {approach_slab.centroid_y_mm:+.0f} mm at seat centroid<br>"
             f"Mux = {approach_slab.uls_mux_knm:+.0f} kN-m"
         ),
         color="#991b1b",
         xanchor="right" if soil_side < 0.0 else "left",
         yanchor="middle",
+        boxed=True,
+        bordercolor="#991b1b",
     )
 
-    load_y_extents.extend([face_y, gap_end_y, label_y])
-    load_z_extents.extend([slab_z0, slab_z1, dim_z, arrow_tail_z])
+    load_y_extents.extend([seat_inner_y, soil_face_y, slab_end_y, gap_end_y, label_y, approach_slab.centroid_y_mm])
+    load_z_extents.extend([label_z, slab_z0, slab_z1, dim_z, arrow_tail_z])
 
 
 def side_view(
@@ -3204,6 +3265,7 @@ def side_view(
         _add_side_approach_slab_reaction(
             fig,
             approach_slab=approach_slab,
+            abut_y=abut_y,
             height_z_mm=height_z_mm,
             bearing_h=bearing_h,
             load_y_extents=load_y_extents,
@@ -3969,6 +4031,7 @@ PROJECT_SETTING_DEFAULTS = {
     "approach_slab_length_y_m": 10.0,
     "approach_slab_width_x_m": 9.0,
     "approach_slab_thickness_m": 0.25,
+    "approach_slab_seat_length_m": 0.30,
     "approach_slab_superimposed_dead_kpa": 3.0,
     "approach_slab_gap_preset": "2.0 m - moderate settlement or local void",
     "approach_slab_gap_custom_m": 2.0,
@@ -4510,6 +4573,23 @@ with st.sidebar:
                 step=0.01,
                 key="approach_slab_thickness_m",
             )
+            approach_slab_seat_max_m = max(0.0, float(depth_y_mm) / 1000.0)
+            approach_slab_seat_default_m = min(
+                approach_slab_seat_max_m,
+                max(0.0, float(st.session_state.get("approach_slab_seat_length_m", 0.30))),
+            )
+            approach_slab_seat_length_m = st.number_input(
+                "Approach slab seat length on abutment (m)",
+                min_value=0.0,
+                max_value=approach_slab_seat_max_m,
+                value=approach_slab_seat_default_m,
+                step=0.05,
+                key="approach_slab_seat_length_m",
+                help=(
+                    "Bearing length of the approach slab on the abutment top. "
+                    "In this soil-supported mode it shifts y_AS and Mux; the reaction magnitude still follows l_gap."
+                ),
+            )
             approach_slab_superimposed_dead_kpa = st.number_input(
                 "Superimposed dead load on slab q_DW (kPa)",
                 min_value=0.0,
@@ -4755,6 +4835,7 @@ with st.sidebar:
         approach_slab_length_y_m = 0.0
         approach_slab_width_x_m = 0.0
         approach_slab_thickness_m = 0.0
+        approach_slab_seat_length_m = 0.0
         approach_slab_superimposed_dead_kpa = 0.0
         approach_slab_gap_m = 0.0
         approach_slab_ll_preset = "None"
@@ -4926,6 +5007,7 @@ approach_slab_result = (
         slab_length_y_m=approach_slab_length_y_m,
         slab_width_x_m=approach_slab_width_x_m,
         slab_thickness_m=approach_slab_thickness_m,
+        seat_length_m=approach_slab_seat_length_m,
         concrete_unit_weight_kn_m3=concrete_unit_weight_kn_m3,
         superimposed_dead_kpa=approach_slab_superimposed_dead_kpa,
         gap_m=approach_slab_gap_m,
