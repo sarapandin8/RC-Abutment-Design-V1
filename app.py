@@ -3031,7 +3031,7 @@ def _add_side_earth_pressure_diagram(
                 f"Mux = {earth_pressure.uls_mux_knm:+.0f} kN-m"
             ),
             color="#92400e",
-            xanchor="right" if soil_side < 0.0 else "left",
+            xanchor="left" if soil_side < 0.0 else "right",
             yanchor="middle",
             boxed=True,
             bordercolor="#92400e",
@@ -3046,7 +3046,7 @@ def _add_side_earth_pressure_diagram(
         component_lines.append(f"q surcharge: {service_other:.1f} kN/m @ H/2")
     if service_live > 1e-9:
         component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
-    summary_label_y = y_at(max_len + label_gap + 1800.0)
+    summary_label_y = y_at(max_len + label_gap + 3300.0)
     summary_label_z = resultant_z if resultant_z > 1e-9 else h_draw / 3.0
     _add_load_tag(
         fig,
@@ -3066,7 +3066,7 @@ def _add_side_earth_pressure_diagram(
         bordercolor="#334155",
     )
 
-    outer_y = y_at(max_len + label_gap + 2200.0)
+    outer_y = y_at(max_len + label_gap + 3800.0)
     load_y_extents.extend([face_y, y_at(max_len), outer_y])
     load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z, summary_label_z])
 
@@ -3149,7 +3149,7 @@ def _add_side_approach_slab_reaction(
         live_text = f"{live_model}: q_LL = 0.00"
     _add_load_tag(
         fig,
-        x=gap_label_x + soil_side * max(520.0, length_draw * 0.16),
+        x=gap_label_x + soil_side * max(930.0, length_draw * 0.28),
         y=note_y,
         text=live_text,
         color="#475569",
@@ -3189,7 +3189,7 @@ def _add_side_approach_slab_reaction(
             line={"color": "#dc2626", "width": 1.2, "dash": "dot"},
         )
     label_y = slab_end_y + soil_side * max(260.0, length_draw * 0.08)
-    label_z = slab_z0 - max(220.0, height_z_mm * 0.045)
+    label_z = slab_z0 - max(540.0, height_z_mm * 0.12)
     _add_load_tag(
         fig,
         x=label_y,
@@ -3215,7 +3215,7 @@ def _add_side_approach_slab_reaction(
             soil_face_y,
             slab_end_y,
             gap_end_y,
-            gap_label_x + soil_side * max(520.0, length_draw * 0.16),
+            gap_label_x + soil_side * max(930.0, length_draw * 0.28),
             label_y,
             label_y + soil_side * max(1400.0, length_draw * 0.20),
             approach_slab.centroid_y_mm,
