@@ -2875,6 +2875,144 @@ def front_view(
     return _finish_view(fig, "Front view", "x (mm)", "z (mm)", show_zero_axes=False)
 
 
+def _add_side_earth_pressure_diagram(
+    fig: go.Figure,
+    *,
+    earth_pressure: EarthPressureSummary,
+    abut_y: float,
+    height_z_mm: float,
+    pile_y: float,
+    load_y_extents: list[float],
+    load_z_extents: list[float],
+) -> None:
+    if earth_pressure.height_m <= 1e-9:
+        return
+    service_soil = abs(earth_pressure.service_soil_kn_per_m)
+    service_other = abs(earth_pressure.service_other_kn_per_m)
+    service_live = abs(earth_pressure.service_live_kn_per_m)
+    if service_soil + service_other + service_live <= 1e-9:
+        return
+
+    h_draw = min(max(earth_pressure.height_m * 1000.0, 1.0), max(height_z_mm, 1.0))
+    force_sign = 1.0 if earth_pressure.direction == "+y" else -1.0
+    soil_side = -force_sign
+    face_y = soil_side * abut_y
+    max_len = min(max(height_z_mm * 0.18, 360.0), max(620.0, pile_y * 0.58))
+
+    p_soil_bottom = 2.0 * service_soil / earth_pressure.height_m
+    p_other = service_other / earth_pressure.height_m
+    p_live = service_live / earth_pressure.height_m
+    p_total = max(p_soil_bottom + p_other + p_live, 1e-9)
+    len_other = max_len * p_other / p_total
+    len_live = max_len * p_live / p_total
+    len_soil = max_len * p_soil_bottom / p_total
+    uniform_len = len_other + len_live
+
+    def y_at(offset_mm: float) -> float:
+        return face_y + soil_side * offset_mm
+
+    if len_other > 1.0:
+        _add_rect(
+            fig,
+            x0=min(y_at(0.0), y_at(len_other)),
+            x1=max(y_at(0.0), y_at(len_other)),
+            y0=0.0,
+            y1=h_draw,
+            fillcolor="#bfdbfe",
+            linecolor="#2563eb",
+            opacity=0.26,
+            layer="above",
+        )
+    if len_live > 1.0:
+        _add_rect(
+            fig,
+            x0=min(y_at(len_other), y_at(uniform_len)),
+            x1=max(y_at(len_other), y_at(uniform_len)),
+            y0=0.0,
+            y1=h_draw,
+            fillcolor="#fed7aa",
+            linecolor="#f97316",
+            opacity=0.28,
+            layer="above",
+        )
+    if len_soil > 1.0:
+        fig.add_trace(
+            go.Scatter(
+                x=[y_at(uniform_len), y_at(uniform_len), y_at(uniform_len + len_soil), y_at(uniform_len)],
+                y=[h_draw, 0.0, 0.0, h_draw],
+                mode="lines",
+                fill="toself",
+                fillcolor="rgba(15, 118, 110, 0.24)",
+                line={"color": "#0f766e", "width": 1.5},
+                hovertemplate=(
+                    "EH soil pressure<br>"
+                    f"K={earth_pressure.pressure_coefficient:.3f}<br>"
+                    f"p_base={p_soil_bottom:.1f} kPa<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
+    for z_frac in (0.18, 0.38, 0.58, 0.78):
+        z = h_draw * z_frac
+        pressure_len = uniform_len + len_soil * (1.0 - z_frac)
+        if pressure_len <= 45.0:
+            continue
+        _add_load_arrow(
+            fig,
+            x=y_at(pressure_len),
+            y=z,
+            dx=-soil_side * pressure_len,
+            dy=0.0,
+            label="",
+            color="#0f766e",
+        )
+
+    soil_uls = abs(earth_pressure.uls_soil_vy_kn)
+    uniform_uls = abs(earth_pressure.uls_other_vy_kn) + abs(earth_pressure.uls_live_vy_kn)
+    total_uls = soil_uls + uniform_uls
+    if total_uls > 1e-9:
+        resultant_z = (soil_uls * h_draw / 3.0 + uniform_uls * h_draw / 2.0) / total_uls
+        resultant_len = max(uniform_len + len_soil * (1.0 - resultant_z / h_draw), max_len * 0.32)
+        _add_load_arrow(
+            fig,
+            x=y_at(resultant_len + max_len * 0.16),
+            y=resultant_z,
+            dx=-soil_side * (resultant_len + max_len * 0.16),
+            dy=0.0,
+            label="",
+            color="#b45309",
+        )
+        _add_load_tag(
+            fig,
+            x=y_at(max_len + max(240.0, max_len * 0.18)),
+            y=resultant_z,
+            text=f"ULS Vy {earth_pressure.uls_vy_kn:+.0f} kN<br>Mux {earth_pressure.uls_mux_knm:+.0f} kN-m",
+            color="#92400e",
+            xanchor="right" if soil_side < 0.0 else "left",
+            yanchor="middle",
+        )
+
+    service_total = service_soil + service_other + service_live
+    _add_load_tag(
+        fig,
+        x=y_at(max_len * 0.55),
+        y=h_draw + max(150.0, height_z_mm * 0.035),
+        text=(
+            "<b>Earth pressure</b><br>"
+            f"K={earth_pressure.pressure_coefficient:.3f}, H={earth_pressure.height_m:.2f} m<br>"
+            f"Service {service_total:.1f} kN/m"
+        ),
+        color="#0f172a",
+        xanchor="center",
+        yanchor="bottom",
+    )
+
+    outer_y = y_at(max_len + max(260.0, max_len * 0.20))
+    load_y_extents.extend([face_y, y_at(max_len), outer_y])
+    load_z_extents.extend([0.0, h_draw, h_draw + max(220.0, height_z_mm * 0.05)])
+
+
 def side_view(
     bearings: Iterable[dict],
     *,
@@ -2883,6 +3021,7 @@ def side_view(
     pilecap_overhang_mm: float,
     pilecap_thickness_mm: float,
     bearing_size_mm: float,
+    earth_pressure: EarthPressureSummary | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     bearing_records = list(bearings)
@@ -2909,6 +3048,16 @@ def side_view(
     load_clearance = max(46.0, half * 0.42)
     load_y_extents = [-pile_y, pile_y]
     load_z_extents = [-pilecap_thickness_mm, height_z_mm + bearing_h]
+    if earth_pressure is not None:
+        _add_side_earth_pressure_diagram(
+            fig,
+            earth_pressure=earth_pressure,
+            abut_y=abut_y,
+            height_z_mm=height_z_mm,
+            pile_y=pile_y,
+            load_y_extents=load_y_extents,
+            load_z_extents=load_z_extents,
+        )
 
     def representative_load(rows: list[dict], key: str) -> float:
         values = [float(row.get(key, 0.0)) for row in rows]
@@ -3062,7 +3211,7 @@ def side_view(
                 )
 
     dim_gap = max(360.0, min(depth_y_mm, height_z_mm) * 0.20, bearing_size_mm * 2.00)
-    right_dim_y = abut_y + dim_gap
+    right_dim_y = max(abut_y + dim_gap, max(load_y_extents) + dim_gap * 0.25)
     _add_dimension_line(
         fig,
         x0=right_dim_y,
@@ -4890,6 +5039,7 @@ with tabs[0]:
             pilecap_overhang_mm=pilecap_overhang_mm,
             pilecap_thickness_mm=pilecap_thickness_mm,
             bearing_size_mm=bearing_size_mm,
+            earth_pressure=earth_pressure_result,
         ),
         width="stretch",
     )
