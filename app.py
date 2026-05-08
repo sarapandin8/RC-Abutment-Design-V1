@@ -3046,7 +3046,7 @@ def _add_side_earth_pressure_diagram(
         component_lines.append(f"q surcharge: {service_other:.1f} kN/m @ H/2")
     if service_live > 1e-9:
         component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
-    summary_label_y = y_at(max_len + label_gap + 2700.0)
+    summary_label_y = y_at(max_len + label_gap + 4200.0)
     summary_label_z = resultant_z if resultant_z > 1e-9 else h_draw / 3.0
     _add_load_tag(
         fig,
@@ -3066,7 +3066,7 @@ def _add_side_earth_pressure_diagram(
         bordercolor="#334155",
     )
 
-    outer_y = y_at(max_len + label_gap + 3300.0)
+    outer_y = y_at(max_len + label_gap + 4700.0)
     load_y_extents.extend([face_y, y_at(max_len), outer_y])
     load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z, summary_label_z])
 
