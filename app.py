@@ -184,6 +184,8 @@ class ApproachSlabReactionSummary:
     superimposed_dead_kpa: float
     live_load_preset: str
     live_load_basis: str
+    live_q_kpa: float
+    live_line_load_kn_m: float
     live_loaded_width_m: float
     track_count: int
     point_load_kn: float
@@ -730,6 +732,8 @@ def approach_slab_reaction_summary(
         superimposed_dead_kpa=q_dw,
         live_load_preset=live_load_preset,
         live_load_basis=live_basis,
+        live_q_kpa=q_ll,
+        live_line_load_kn_m=line_ll,
         live_loaded_width_m=loaded_width,
         track_count=tracks,
         point_load_kn=point_load,
@@ -3042,11 +3046,8 @@ def _add_side_earth_pressure_diagram(
         component_lines.append(f"q surcharge: {service_other:.1f} kN/m @ H/2")
     if service_live > 1e-9:
         component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
-    summary_label_y = y_at(max_len + label_gap + 900.0)
-    summary_label_z = min(
-        max(h_draw * 0.60, resultant_z + max(900.0, height_z_mm * 0.18)),
-        h_draw - max(420.0, height_z_mm * 0.09),
-    )
+    summary_label_y = y_at(max_len + label_gap + 1800.0)
+    summary_label_z = resultant_z if resultant_z > 1e-9 else h_draw / 3.0
     _add_load_tag(
         fig,
         x=summary_label_y,
@@ -3065,7 +3066,7 @@ def _add_side_earth_pressure_diagram(
         bordercolor="#334155",
     )
 
-    outer_y = y_at(max_len + label_gap + 1280.0)
+    outer_y = y_at(max_len + label_gap + 2200.0)
     load_y_extents.extend([face_y, y_at(max_len), outer_y])
     load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z, summary_label_z])
 
@@ -3105,18 +3106,6 @@ def _add_side_approach_slab_reaction(
         opacity=0.88,
         layer="above",
     )
-    _add_load_tag(
-        fig,
-        x=(soil_face_y + slab_end_y) / 2.0,
-        y=(slab_z0 + slab_z1) / 2.0,
-        text=f"<b>Approach slab</b><br>L_AS shown = {length_draw / 1000.0:.2f} m",
-        color="#78350f",
-        xanchor="center",
-        yanchor="middle",
-        boxed=True,
-        bordercolor="#92400e",
-        bgcolor="rgba(255,251,235,0.96)",
-    )
     fig.add_shape(
         type="line",
         layer="above",
@@ -3147,10 +3136,30 @@ def _add_side_approach_slab_reaction(
         line={"color": "#475569", "width": 1.1, "dash": "dot"},
     )
     gap_note = " shown clipped" if gap_mm > length_draw + 1.0 else ""
+    note_y = dim_z + max(80.0, height_z_mm * 0.015)
+    gap_label_x = (soil_face_y + gap_end_y) / 2.0
+    live_model = approach_slab.live_load_preset.split(" (", 1)[0]
+    if live_model.startswith("Road - AASHTO HL-93"):
+        live_model = "Road - AASHTO HL-93"
+    if approach_slab.live_q_kpa > 1e-9:
+        live_text = f"{live_model}: q_LL = {approach_slab.live_q_kpa:.2f} kPa"
+    elif approach_slab.live_line_load_kn_m > 1e-9:
+        live_text = f"{live_model}: q_LL = {approach_slab.live_line_load_kn_m:.2f} kN/m"
+    else:
+        live_text = f"{live_model}: q_LL = 0.00"
     _add_load_tag(
         fig,
-        x=(soil_face_y + gap_end_y) / 2.0,
-        y=dim_z + max(80.0, height_z_mm * 0.015),
+        x=gap_label_x + soil_side * max(520.0, length_draw * 0.16),
+        y=note_y,
+        text=live_text,
+        color="#475569",
+        xanchor="right" if soil_side < 0.0 else "left",
+        yanchor="bottom",
+    )
+    _add_load_tag(
+        fig,
+        x=gap_label_x,
+        y=note_y,
         text=f"l_gap = {approach_slab.gap_m:.2f} m{gap_note}",
         color="#475569",
         xanchor="center",
@@ -3206,6 +3215,7 @@ def _add_side_approach_slab_reaction(
             soil_face_y,
             slab_end_y,
             gap_end_y,
+            gap_label_x + soil_side * max(520.0, length_draw * 0.16),
             label_y,
             label_y + soil_side * max(1400.0, length_draw * 0.20),
             approach_slab.centroid_y_mm,
