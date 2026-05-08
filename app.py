@@ -24,6 +24,42 @@ REBAR_FY_BY_DIA_MPA = {
 PMM_METHOD = "PMM surface"
 BIAXIAL_METHODS = ["Load contour", "Linear", PMM_METHOD]
 DEAD_LOAD_FACTOR = 1.40
+AASHTO_EH_FACTOR = 1.50
+AASHTO_SURCHARGE_FACTOR = 1.50
+AASHTO_LIVE_SURCHARGE_FACTOR = 1.75
+
+SOIL_PRESETS = {
+    "Thailand general backfill": {
+        "gamma_soil_kn_m3": 18.0,
+        "phi_deg": 30.0,
+        "note": "General compacted granular backfill when project soil data is not available.",
+    },
+    "Thailand conservative backfill": {
+        "gamma_soil_kn_m3": 20.0,
+        "phi_deg": 28.0,
+        "note": "More conservative preliminary values for uncertain backfill.",
+    },
+    "Custom": {
+        "gamma_soil_kn_m3": 18.0,
+        "phi_deg": 30.0,
+        "note": "Use project-specific geotechnical values.",
+    },
+}
+Q_OTHER_PRESETS_KPA = {
+    "None - traffic handled by live surcharge (0 kPa)": 0.0,
+    "Roadway pavement / light permanent load (5 kPa)": 5.0,
+    "Thailand general allowance (10 kPa)": 10.0,
+    "Heavy storage or construction allowance (20 kPa)": 20.0,
+    "Custom": None,
+}
+TRAFFIC_SURCHARGE_PRESETS = {
+    "Road bridge - AASHTO auto h_eq": {"type": "road_auto", "q_kpa": None},
+    "Railway light/passenger - q_LS 30 kPa": {"type": "q", "q_kpa": 30.0},
+    "Railway mixed/general - q_LS 50 kPa": {"type": "q", "q_kpa": 50.0},
+    "Railway heavy/conservative - q_LS 60 kPa": {"type": "q", "q_kpa": 60.0},
+    "Custom h_eq": {"type": "h_eq", "q_kpa": None},
+    "Custom q_LS": {"type": "q_custom", "q_kpa": None},
+}
 
 ALPHA_GUIDANCE_MD = """
 **Load contour alpha guide**
@@ -79,6 +115,31 @@ class DeadLoadSummary:
     service_dl_kn: float
     factor: float
     uls_pu_z_kn: float
+
+
+@dataclass(frozen=True)
+class EarthPressureSummary:
+    height_m: float
+    width_m: float
+    gamma_soil_kn_m3: float
+    phi_deg: float
+    pressure_mode: str
+    pressure_coefficient: float
+    q_other_kpa: float
+    live_q_kpa: float
+    live_h_eq_m: float
+    direction: str
+    service_soil_kn_per_m: float
+    service_other_kn_per_m: float
+    service_live_kn_per_m: float
+    uls_soil_vy_kn: float
+    uls_other_vy_kn: float
+    uls_live_vy_kn: float
+    uls_vy_kn: float
+    uls_soil_mux_knm: float
+    uls_other_mux_knm: float
+    uls_live_mux_knm: float
+    uls_mux_knm: float
 
 
 @dataclass(frozen=True)
@@ -270,10 +331,90 @@ def abutment_dead_load_summary(
     )
 
 
+def earth_pressure_coefficient(phi_deg: float, pressure_mode: str) -> float:
+    phi_rad = math.radians(min(max(float(phi_deg), 0.0), 45.0))
+    sin_phi = math.sin(phi_rad)
+    if pressure_mode.startswith("At-rest"):
+        return max(0.0, 1.0 - sin_phi)
+    return max(0.0, (1.0 - sin_phi) / max(1.0 + sin_phi, 1e-9))
+
+
+def aashto_road_h_eq_m(height_m: float) -> float:
+    height = max(float(height_m), 0.0)
+    if height <= 1.5:
+        return 1.20
+    if height <= 3.0:
+        return 1.20 + (height - 1.5) * (0.90 - 1.20) / 1.5
+    if height <= 6.0:
+        return 0.90 + (height - 3.0) * (0.60 - 0.90) / 3.0
+    return 0.60
+
+
+def earth_pressure_summary(
+    width_x_mm: float,
+    height_m: float,
+    gamma_soil_kn_m3: float,
+    phi_deg: float,
+    pressure_mode: str,
+    q_other_kpa: float,
+    live_q_kpa: float,
+    live_h_eq_m: float,
+    direction: str,
+) -> EarthPressureSummary:
+    height = max(float(height_m), 0.0)
+    width_m = max(float(width_x_mm) / 1000.0, 1e-9)
+    gamma_soil = max(float(gamma_soil_kn_m3), 0.0)
+    k = earth_pressure_coefficient(phi_deg, pressure_mode)
+    q_other = max(float(q_other_kpa), 0.0)
+    live_q = max(float(live_q_kpa), 0.0)
+    sign = -1.0 if str(direction).strip().startswith("-") else 1.0
+
+    soil_force_kn_per_m = 0.5 * k * gamma_soil * height**2
+    other_force_kn_per_m = k * q_other * height
+    live_force_kn_per_m = k * live_q * height
+
+    soil_moment_knm_per_m = soil_force_kn_per_m * height / 3.0
+    other_moment_knm_per_m = other_force_kn_per_m * height / 2.0
+    live_moment_knm_per_m = live_force_kn_per_m * height / 2.0
+
+    soil_vy = sign * AASHTO_EH_FACTOR * soil_force_kn_per_m * width_m
+    other_vy = sign * AASHTO_SURCHARGE_FACTOR * other_force_kn_per_m * width_m
+    live_vy = sign * AASHTO_LIVE_SURCHARGE_FACTOR * live_force_kn_per_m * width_m
+
+    soil_mux = -sign * AASHTO_EH_FACTOR * soil_moment_knm_per_m * width_m
+    other_mux = -sign * AASHTO_SURCHARGE_FACTOR * other_moment_knm_per_m * width_m
+    live_mux = -sign * AASHTO_LIVE_SURCHARGE_FACTOR * live_moment_knm_per_m * width_m
+
+    return EarthPressureSummary(
+        height_m=height,
+        width_m=width_m,
+        gamma_soil_kn_m3=gamma_soil,
+        phi_deg=float(phi_deg),
+        pressure_mode=pressure_mode,
+        pressure_coefficient=k,
+        q_other_kpa=q_other,
+        live_q_kpa=live_q,
+        live_h_eq_m=max(float(live_h_eq_m), 0.0),
+        direction="+y" if sign > 0 else "-y",
+        service_soil_kn_per_m=soil_force_kn_per_m,
+        service_other_kn_per_m=other_force_kn_per_m,
+        service_live_kn_per_m=live_force_kn_per_m,
+        uls_soil_vy_kn=soil_vy,
+        uls_other_vy_kn=other_vy,
+        uls_live_vy_kn=live_vy,
+        uls_vy_kn=soil_vy + other_vy + live_vy,
+        uls_soil_mux_knm=soil_mux,
+        uls_other_mux_knm=other_mux,
+        uls_live_mux_knm=live_mux,
+        uls_mux_knm=soil_mux + other_mux + live_mux,
+    )
+
+
 def pilecap_base_force_summary_table(
     resultant: BearingResultant,
     width_x_mm: float,
     dead_load: DeadLoadSummary | None = None,
+    earth_pressure: EarthPressureSummary | None = None,
 ) -> pd.DataFrame:
     width_m = max(float(width_x_mm) / 1000.0, 1e-9)
     dead_load_pu_kn = dead_load.uls_pu_z_kn if dead_load is not None else 0.0
@@ -309,16 +450,74 @@ def pilecap_base_force_summary_table(
                 },
             ]
         )
+    if earth_pressure is not None:
+        total_vy_kn = resultant.vy_kn + earth_pressure.uls_vy_kn
+        rows.extend(
+            [
+                {
+                    "Resultant for pile cap": "Vy from bearings",
+                    "Point at centroid": f"{resultant.vy_kn:,.2f} kN",
+                    "Linearized over x width": f"{resultant.vy_kn / width_m:,.2f} kN/m",
+                    "Basis": "sum(Pu_y from bearing table)",
+                },
+                {
+                    "Resultant for pile cap": "Vy from EH soil pressure",
+                    "Point at centroid": f"{earth_pressure.uls_soil_vy_kn:,.2f} kN",
+                    "Linearized over x width": f"{earth_pressure.uls_soil_vy_kn / width_m:,.2f} kN/m",
+                    "Basis": "1.50 x 0.5 x K x gamma_soil x H^2 x Lx",
+                },
+                {
+                    "Resultant for pile cap": "Vy from q_other surcharge",
+                    "Point at centroid": f"{earth_pressure.uls_other_vy_kn:,.2f} kN",
+                    "Linearized over x width": f"{earth_pressure.uls_other_vy_kn / width_m:,.2f} kN/m",
+                    "Basis": "1.50 x K x q_other x H x Lx",
+                },
+                {
+                    "Resultant for pile cap": "Vy from traffic LS surcharge",
+                    "Point at centroid": f"{earth_pressure.uls_live_vy_kn:,.2f} kN",
+                    "Linearized over x width": f"{earth_pressure.uls_live_vy_kn / width_m:,.2f} kN/m",
+                    "Basis": "1.75 x K x q_LS x H x Lx",
+                },
+                {
+                    "Resultant for pile cap": "Total Vy for pile cap ULS",
+                    "Point at centroid": f"{total_vy_kn:,.2f} kN",
+                    "Linearized over x width": f"{total_vy_kn / width_m:,.2f} kN/m",
+                    "Basis": "bearing Vy + factored EH/q_other/LS",
+                },
+            ]
+        )
     rows.extend(
         [
             {
-                "Resultant for pile cap": "Mu_x about x",
+                "Resultant for pile cap": "Mu_x from bearings",
                 "Point at centroid": f"{resultant.mux_knm:,.2f} kN-m",
                 "Linearized over x width": f"{resultant.mux_knm / width_m:,.2f} kN-m/m",
                 "Basis": "sum(Mu_x + (-y Pu_z - z Pu_y) / 1000)",
             },
+        ]
+    )
+    if earth_pressure is not None:
+        total_mux_knm = resultant.mux_knm + earth_pressure.uls_mux_knm
+        rows.extend(
+            [
+                {
+                    "Resultant for pile cap": "Mu_x from earth pressure ULS",
+                    "Point at centroid": f"{earth_pressure.uls_mux_knm:,.2f} kN-m",
+                    "Linearized over x width": f"{earth_pressure.uls_mux_knm / width_m:,.2f} kN-m/m",
+                    "Basis": "EH at H/3, q_other and LS at H/2",
+                },
+                {
+                    "Resultant for pile cap": "Total Mu_x for pile cap ULS",
+                    "Point at centroid": f"{total_mux_knm:,.2f} kN-m",
+                    "Linearized over x width": f"{total_mux_knm / width_m:,.2f} kN-m/m",
+                    "Basis": "bearing Mu_x + earth pressure Mu_x",
+                },
+            ]
+        )
+    rows.extend(
+        [
             {
-                "Resultant for pile cap": "Mu_y about y",
+                "Resultant for pile cap": "Mu_y from bearings",
                 "Point at centroid": f"{resultant.muy_knm:,.2f} kN-m",
                 "Linearized over x width": "Use point couple",
                 "Basis": "sum(Mu_y + (z Pu_x + x Pu_z) / 1000)",
@@ -2774,6 +2973,19 @@ PROJECT_SETTING_DEFAULTS = {
     "pilecap_overhang_mm": 500.0,
     "pilecap_thickness_mm": 1500.0,
     "concrete_unit_weight_kn_m3": 24.0,
+    "include_earth_pressure": True,
+    "earth_load_code": "AASHTO LRFD",
+    "earth_backfill_height_m": 4.5,
+    "soil_preset": "Thailand general backfill",
+    "earth_gamma_soil_custom_kn_m3": 18.0,
+    "earth_phi_custom_deg": 30.0,
+    "earth_pressure_mode": "Active (Ka)",
+    "q_other_preset": "None - traffic handled by live surcharge (0 kPa)",
+    "q_other_custom_kpa": 10.0,
+    "traffic_surcharge_preset": "Road bridge - AASHTO auto h_eq",
+    "traffic_custom_h_eq_m": 0.75,
+    "traffic_custom_q_kpa": 50.0,
+    "earth_pressure_direction": "+y",
     "cover_mm": 75.0,
     "min_clear_spacing_mm": 100.0,
     "max_spacing_advisory_mm": 450.0,
@@ -3049,6 +3261,143 @@ with st.sidebar:
         key="concrete_unit_weight_kn_m3",
     )
 
+    st.header("Earth Pressure")
+    include_earth_pressure = st.checkbox(
+        "Include earth pressure in pile cap summary",
+        value=True,
+        key="include_earth_pressure",
+    )
+    earth_load_code = st.selectbox(
+        "Load code",
+        ["AASHTO LRFD"],
+        key="earth_load_code",
+        help="Earth pressure uses AASHTO-style EH, surcharge, and live load surcharge factors in the pile cap summary.",
+    )
+    earth_backfill_height_m = st.number_input(
+        "Backfill height H (m)",
+        min_value=0.10,
+        max_value=30.0,
+        value=4.50,
+        step=0.10,
+        key="earth_backfill_height_m",
+        help="Height of retained backfill producing lateral pressure on the abutment/pier.",
+    )
+    soil_preset = st.selectbox(
+        "Soil preset",
+        list(SOIL_PRESETS),
+        key="soil_preset",
+        help="Default Thailand general backfill is intended only for preliminary use when geotechnical data is unavailable.",
+    )
+    if soil_preset == "Custom":
+        earth_gamma_soil_kn_m3 = st.number_input(
+            "gamma_soil (kN/m3)",
+            min_value=10.0,
+            max_value=25.0,
+            value=18.0,
+            step=0.5,
+            key="earth_gamma_soil_custom_kn_m3",
+        )
+        earth_phi_deg = st.number_input(
+            "friction angle phi (deg)",
+            min_value=15.0,
+            max_value=45.0,
+            value=30.0,
+            step=1.0,
+            key="earth_phi_custom_deg",
+        )
+    else:
+        soil_values = SOIL_PRESETS[soil_preset]
+        earth_gamma_soil_kn_m3 = float(soil_values["gamma_soil_kn_m3"])
+        earth_phi_deg = float(soil_values["phi_deg"])
+        st.caption(
+            f"{soil_values['note']} gamma_soil = {earth_gamma_soil_kn_m3:.1f} kN/m3, "
+            f"phi = {earth_phi_deg:.0f} deg."
+        )
+    earth_pressure_mode = st.selectbox(
+        "Pressure mode",
+        ["Active (Ka)", "At-rest (K0)"],
+        key="earth_pressure_mode",
+        help="Active assumes the abutment can move slightly away from soil. At-rest is for restrained/stiffer cases.",
+    )
+    q_other_preset = st.selectbox(
+        "q_other permanent surcharge",
+        list(Q_OTHER_PRESETS_KPA),
+        key="q_other_preset",
+        help="Use for pavement, ballast, storage, or other non-traffic surcharge on the backfill. Do not repeat traffic here.",
+    )
+    if q_other_preset == "Custom":
+        q_other_kpa = st.number_input(
+            "custom q_other (kPa)",
+            min_value=0.0,
+            max_value=200.0,
+            value=10.0,
+            step=1.0,
+            key="q_other_custom_kpa",
+        )
+    else:
+        q_other_kpa = float(Q_OTHER_PRESETS_KPA[q_other_preset])
+
+    traffic_surcharge_preset = st.selectbox(
+        "Traffic live load surcharge",
+        list(TRAFFIC_SURCHARGE_PRESETS),
+        key="traffic_surcharge_preset",
+        help="Road bridge uses AASHTO-style auto h_eq. Railway presets use equivalent uniform q_LS.",
+    )
+    traffic_surcharge = TRAFFIC_SURCHARGE_PRESETS[traffic_surcharge_preset]
+    if traffic_surcharge["type"] == "road_auto":
+        traffic_h_eq_m = aashto_road_h_eq_m(earth_backfill_height_m)
+        traffic_q_kpa = earth_gamma_soil_kn_m3 * traffic_h_eq_m
+    elif traffic_surcharge["type"] == "q":
+        traffic_q_kpa = float(traffic_surcharge["q_kpa"])
+        traffic_h_eq_m = traffic_q_kpa / max(earth_gamma_soil_kn_m3, 1e-9)
+    elif traffic_surcharge["type"] == "h_eq":
+        traffic_h_eq_m = st.number_input(
+            "custom h_eq (m)",
+            min_value=0.0,
+            max_value=10.0,
+            value=0.75,
+            step=0.05,
+            key="traffic_custom_h_eq_m",
+        )
+        traffic_q_kpa = earth_gamma_soil_kn_m3 * traffic_h_eq_m
+    else:
+        traffic_q_kpa = st.number_input(
+            "custom q_LS (kPa)",
+            min_value=0.0,
+            max_value=300.0,
+            value=50.0,
+            step=5.0,
+            key="traffic_custom_q_kpa",
+        )
+        traffic_h_eq_m = traffic_q_kpa / max(earth_gamma_soil_kn_m3, 1e-9)
+    earth_pressure_direction = st.selectbox(
+        "Earth pressure direction",
+        ["+y", "-y"],
+        key="earth_pressure_direction",
+        help="Controls the sign of Vy and Mu_x in the pile cap force summary.",
+    )
+    earth_pressure_k = earth_pressure_coefficient(earth_phi_deg, earth_pressure_mode)
+    st.caption(
+        f"{earth_load_code}: K = {earth_pressure_k:.3f}, q_other = {q_other_kpa:.1f} kPa, "
+        f"traffic h_eq = {traffic_h_eq_m:.2f} m, q_LS = {traffic_q_kpa:.1f} kPa."
+    )
+    with st.expander("Earth pressure quick guide", expanded=False):
+        st.markdown(
+            """
+            `Active (Ka)` is for an abutment or wall that can move slightly away from the backfill.  
+            `At-rest (K0)` is for restrained or very stiff cases and usually gives larger pressure.
+
+            `q_other` is a permanent or non-traffic surcharge on the backfill, in kPa. Use it for pavement,
+            ballast, storage, construction allowance, or project-specific uniform surcharge.
+
+            `h_eq` is an equivalent height of soil for traffic live load surcharge. It is not an actual fill height.
+            The app converts it to `q_LS = gamma_soil x h_eq`, then to lateral pressure `K x q_LS`.
+
+            Do not include the same traffic load in both `q_other` and traffic live load surcharge.
+            Railway presets are preliminary uniform surcharge values; use owner/geotechnical data when available.
+            """
+        )
+
     st.header("Reinforcement")
     cover_mm = st.number_input("Clear cover to tie / outer bar (mm)", min_value=25.0, value=75.0, step=5.0, key="cover_mm")
     min_clear_spacing_mm = st.number_input("minimum clear bar spacing (mm)", min_value=25.0, value=100.0, step=25.0, key="min_clear_spacing_mm")
@@ -3184,6 +3533,21 @@ dead_load_summary = abutment_dead_load_summary(
     depth_y_mm=depth_y_mm,
     height_z_mm=height_z_mm,
     unit_weight_kn_m3=concrete_unit_weight_kn_m3,
+)
+earth_pressure_result = (
+    earth_pressure_summary(
+        width_x_mm=width_x_mm,
+        height_m=earth_backfill_height_m,
+        gamma_soil_kn_m3=earth_gamma_soil_kn_m3,
+        phi_deg=earth_phi_deg,
+        pressure_mode=earth_pressure_mode,
+        q_other_kpa=q_other_kpa,
+        live_q_kpa=traffic_q_kpa,
+        live_h_eq_m=traffic_h_eq_m,
+        direction=earth_pressure_direction,
+    )
+    if include_earth_pressure
+    else None
 )
 
 st.subheader("Strength Design Strip")
@@ -3475,7 +3839,8 @@ with tabs[1]:
 
     st.subheader("Pile Cap Base Force Summary")
     st.caption(
-        f"Uses all bearing loads transferred to the abutment/pier base centroid and adds abutment/pier self-weight. "
+        f"Uses all bearing loads transferred to the abutment/pier base centroid, abutment/pier self-weight, "
+        f"and selected earth pressure loads. "
         f"Coordinate origin is the centroid used by the bearing table; x width = {width_x_mm / 1000.0:,.3f} m. "
         "Compression Pu_z is positive, and moment signs follow the displayed axes."
     )
@@ -3484,14 +3849,27 @@ with tabs[1]:
     dl_cols[1].metric("Service DL", f"{dead_load_summary.service_dl_kn:,.2f} kN")
     dl_cols[2].metric("DL factor", f"{dead_load_summary.factor:.2f}")
     dl_cols[3].metric("Pu_z from 1.40D", f"{dead_load_summary.uls_pu_z_kn:,.2f} kN")
+    if earth_pressure_result is not None:
+        ep_cols = st.columns(4)
+        ep_cols[0].metric("Earth K", f"{earth_pressure_result.pressure_coefficient:.3f}")
+        ep_cols[1].metric("EH service", f"{earth_pressure_result.service_soil_kn_per_m:,.2f} kN/m")
+        ep_cols[2].metric(
+            "LS surcharge",
+            f"{earth_pressure_result.service_live_kn_per_m:,.2f} kN/m",
+            delta=f"h_eq {earth_pressure_result.live_h_eq_m:.2f} m",
+            delta_color="off",
+        )
+        ep_cols[3].metric("ULS Vy earth", f"{earth_pressure_result.uls_vy_kn:,.2f} kN")
     st.dataframe(
-        pilecap_base_force_summary_table(global_resultant, width_x_mm, dead_load_summary),
+        pilecap_base_force_summary_table(global_resultant, width_x_mm, dead_load_summary, earth_pressure_result),
         width="stretch",
         hide_index=True,
     )
     st.info(
         "Self-weight is calculated as a rectangular abutment/pier block from the current Geometry inputs "
         "(Lx x t x H x concrete unit weight). It is applied at the centroid, so it adds Pu_z only and no moment. "
+        "Earth pressure is applied along the selected y direction; triangular soil pressure acts at H/3 above the base, "
+        "while q_other and traffic live load surcharge act at H/2. "
         "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
         "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
         "Mu_y is kept as a point couple at the centroid because smearing it uniformly along x would hide the "
@@ -3564,6 +3942,21 @@ with tabs[3]:
 
         The self-weight is assumed to act at the abutment/pier centroid, so it increases `Pu_z` only and does not
         add `Mu_x`, `Mu_y`, or `Tz`.
+
+        Earth pressure is calculated with an AASHTO-style lateral pressure coefficient:
+
+        `Ka = (1 - sin(phi)) / (1 + sin(phi))` for active pressure  
+        `K0 = 1 - sin(phi)` for at-rest pressure  
+        `P_EH = 0.5 x K x gamma_soil x H^2` per meter along x, acting at `H/3`  
+        `P_q = K x q_other x H` per meter along x, acting at `H/2`  
+        `q_LS = gamma_soil x h_eq` and `P_LS = K x q_LS x H` per meter along x, acting at `H/2`
+
+        For the pile-cap ULS summary, the app uses AASHTO-style factors:
+
+        `EH factor = 1.50`, `q_other factor = 1.50`, `traffic LS factor = 1.75`
+
+        These earth pressure effects are added to the pile-cap interface `Vy` and `Mu_x` only. They are not added to
+        the bearing table and do not change the current reinforced concrete section check.
 
         The `Mu_x / Lx` value is a distributed line couple along the wall length. It is theoretically usable when the
         pile-cap analysis model accepts a wall-line moment/couple input. It is not a vertical line load in `kN/m`.
