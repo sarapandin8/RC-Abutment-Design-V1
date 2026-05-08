@@ -718,6 +718,34 @@ def pilecap_base_force_summary_table(
     return pd.DataFrame(rows)
 
 
+def section_design_resultant_with_earth_pressure(
+    bearing_resultant: BearingResultant,
+    earth_pressure: EarthPressureSummary | None,
+    design_width_x_mm: float,
+) -> tuple[BearingResultant, float, float, float]:
+    if earth_pressure is None:
+        return bearing_resultant, 0.0, 0.0, 0.0
+
+    design_width_m = max(float(design_width_x_mm) / 1000.0, 0.0)
+    earth_width_m = max(float(earth_pressure.width_m), 1e-9)
+    width_ratio = min(1.0, design_width_m / earth_width_m)
+    earth_vy_kn = earth_pressure.uls_vy_kn * width_ratio
+    earth_mux_knm = earth_pressure.uls_mux_knm * width_ratio
+    return (
+        BearingResultant(
+            pu_kn=bearing_resultant.pu_kn,
+            vx_kn=bearing_resultant.vx_kn,
+            vy_kn=bearing_resultant.vy_kn + earth_vy_kn,
+            mux_knm=bearing_resultant.mux_knm + earth_mux_knm,
+            muy_knm=bearing_resultant.muy_knm,
+            torsion_z_knm=bearing_resultant.torsion_z_knm,
+        ),
+        width_ratio,
+        earth_vy_kn,
+        earth_mux_knm,
+    )
+
+
 def _min_positive_spacing_mm(values: Iterable[float]) -> float:
     unique_values = sorted({round(float(value), 3) for value in values})
     spacings = [
@@ -3325,7 +3353,7 @@ def metric_row(resultant, check, design_width_x_mm: float | None = None):
 
 
 st.title("RC Bridge Abutment / Wall Pier ULS Designer")
-st.caption("Bearing ULS resultants, wall-pier PMM checks, abutment earth pressure, and pile-cap interface summaries.")
+st.caption("Bearing and earth-pressure ULS resultants, PMM checks, stem design, and pile-cap interface summaries.")
 
 with st.sidebar:
     st.markdown("### 💾 Save / Load Design")
@@ -3474,7 +3502,7 @@ with st.sidebar:
     if is_abutment_mode:
         st.header("Earth Pressure")
         include_earth_pressure = st.checkbox(
-            "Include earth pressure in pile cap summary and stem design",
+            "Include earth pressure in section design, pile cap summary, and stem design",
             value=True,
             key="include_earth_pressure",
         )
@@ -3661,7 +3689,8 @@ with st.sidebar:
                 The app converts it to `q_LS = gamma_soil x h_eq`, then to lateral pressure `K x q_LS`.
 
                 Bearing table loads are assumed to be already factored ULS loads. The selected earth pressure code
-                only factors app-generated EH, q_other/ES, and traffic LS. Do not include the same traffic load in
+                only factors app-generated EH, q_other/ES, and traffic LS. The factored earth pressure is added to
+                the strength-section design over the selected strip width. Do not include the same traffic load in
                 both `q_other` and traffic live load surcharge.
                 """
             )
@@ -3918,7 +3947,12 @@ else:
     strength_display_names = selected_strength_names
 
 strength_records = localize_bearing_records(strength_records_global, strength_strip_center_x_mm)
-resultant = combine_bearing_loads(strength_records)
+bearing_resultant = combine_bearing_loads(strength_records)
+resultant, earth_design_width_ratio, earth_design_vy_kn, earth_design_mux_knm = section_design_resultant_with_earth_pressure(
+    bearing_resultant,
+    earth_pressure_result,
+    strength_design_width_x_mm,
+)
 spacing_text = (
     f"{strip_info['spacing_limit_mm']:,.0f} mm"
     if math.isfinite(strip_info["spacing_limit_mm"])
@@ -3940,6 +3974,13 @@ if strip_width_mode != "Full abutment width":
         f"Design strip: {', '.join(strength_display_names)} | "
         f"center x = {strength_strip_center_x_mm:,.0f} mm | "
         f"section used for strength = {strength_design_width_x_mm:,.0f} x {depth_y_mm:,.0f} mm"
+    )
+if earth_pressure_result is not None:
+    st.info(
+        "Section design includes earth pressure over the selected strip: "
+        f"Vy = {earth_design_vy_kn:,.2f} kN, "
+        f"Mux = {earth_design_mux_knm:,.2f} kN-m "
+        f"({earth_design_width_ratio:.1%} of full-width earth pressure)."
     )
 
 if resultant.pu_kn < 0:
@@ -4046,9 +4087,26 @@ with tabs[0]:
 with tabs[1]:
     metric_row(resultant, check, strength_design_width_x_mm)
     st.markdown(
-        '<p class="small-note">Vx and Vy are reported as fixed-base force resultants only. Shear design is intentionally outside this scope.</p>',
+        '<p class="small-note">Section design uses the displayed Pu, Mux, and Muy. Vx and Vy are reported as fixed-base force resultants only; shear design is intentionally outside this scope.</p>',
         unsafe_allow_html=True,
     )
+    with st.expander("Section design demand breakdown", expanded=earth_pressure_result is not None):
+        demand_rows = [
+            ["Bearing strip Pu", bearing_resultant.pu_kn, "kN"],
+            ["Bearing strip Vy", bearing_resultant.vy_kn, "kN"],
+            ["Earth pressure Vy added to strip", earth_design_vy_kn, "kN"],
+            ["Section design Vy", resultant.vy_kn, "kN"],
+            ["Bearing strip Mux", bearing_resultant.mux_knm, "kN-m"],
+            ["Earth pressure Mux added to strip", earth_design_mux_knm, "kN-m"],
+            ["Section design Mux", resultant.mux_knm, "kN-m"],
+            ["Section design Muy", resultant.muy_knm, "kN-m"],
+        ]
+        st.dataframe(pd.DataFrame(demand_rows, columns=["Demand item", "Value", "Unit"]), width="stretch", hide_index=True)
+        if earth_pressure_result is not None:
+            st.caption(
+                "Earth pressure is scaled by the selected strength-section width before being added to Mux. "
+                f"Scale = {earth_design_width_ratio:.1%} of the full abutment width."
+            )
     with st.expander("Global all-bearing resultants", expanded=False):
         global_table = pd.DataFrame(
             [
@@ -4258,7 +4316,7 @@ with tabs[3]:
 
         **Structure type and generated load factoring**
 
-        `Structure type = Abutment with backfill` enables earth pressure inputs and the abutment stem strip design.
+        `Structure type = Abutment with backfill` enables earth pressure inputs, section-design earth pressure, and the abutment stem strip design.
         `Structure type = Wall Pier / Pier wall without backfill` hides earth pressure and excludes it from all
         summaries. Bearing loads in the table are assumed to be already factored `ULS` loads from the user's chosen
         bridge load combination, so the app does not factor bearing loads again.
@@ -4277,6 +4335,18 @@ with tabs[3]:
         `DA1 C2: A2 + M2`, with `gamma_G = 1.00`, `gamma_Q = 1.30`, and `gamma_tan_phi = 1.25`
 
         Use `Custom factors` when the owner, geotechnical report, or National Annex specifies different values.
+
+        **Strength section demand**
+
+        The bearing table is not rewritten. For section design in Abutment mode, the app first calculates the selected
+        bearing strip resultant, then adds the generated earth pressure over the selected strength-section width:
+
+        `Mux_design = Mux_bearing_strip + Mux_earth x (beff / Lx)`  
+        `Pu_design = Pu_bearing_strip`  
+        `Muy_design = Muy_bearing_strip`
+
+        `Vy` from earth pressure is reported in the demand breakdown, but the PMM strength check uses `Pu`, `Mux`,
+        and `Muy`.
 
         **Pile cap base force summary**
 
@@ -4304,8 +4374,8 @@ with tabs[3]:
         `P_q = K x q_other x H` per meter along x, acting at `H/2`  
         `q_LS = gamma_soil x h_eq` and `P_LS = K x q_LS x H` per meter along x, acting at `H/2`
 
-        These earth pressure effects are added to the pile-cap interface `Vy` and `Mu_x` only. They are not added to
-        the bearing table and do not change the bearing PMM strip check.
+        These earth pressure effects are added to the pile-cap interface `Vy` and `Mu_x`, and to the strength-section
+        `Mu_x` demand over the selected strip width. They are not added back into the bearing table.
 
         **Abutment stem design**
 
@@ -4316,8 +4386,8 @@ with tabs[3]:
 
         The strip uses the wall thickness along y, the selected cover, the selected stem bar diameter, and the editable
         `phi flexure` value to estimate required vertical steel and a spacing guide. This stem strip design is separate
-        from the bearing PMM check because earth pressure is a distributed lateral load over the stem height, while the
-        PMM check is a bearing-load section check.
+        from the PMM section check because it is a preliminary 1 m vertical-flexure design from earth pressure only,
+        while the PMM section check combines the selected bearing strip with proportional earth-pressure `Mu_x`.
 
         The `Mu_x / Lx` value is a distributed line couple along the wall length. It is theoretically usable when the
         pile-cap analysis model accepts a wall-line moment/couple input. It is not a vertical line load in `kN/m`.
