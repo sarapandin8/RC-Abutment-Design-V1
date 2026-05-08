@@ -1280,13 +1280,13 @@ def effective_strip_recommendation(
     selected_names: Iterable[str],
     full_width_x_mm: float,
     depth_y_mm: float,
-    bearing_size_mm: float,
+    bearing_size_x_mm: float,
 ) -> dict[str, float]:
     selected = selected_bearings(records, selected_names) or records
     selected_x = [float(row.get("x_mm", 0.0)) for row in selected]
     selected_min_x = min(selected_x) if selected_x else 0.0
     selected_max_x = max(selected_x) if selected_x else 0.0
-    loaded_width = bearing_size_mm + (selected_max_x - selected_min_x if selected_x else 0.0)
+    loaded_width = bearing_size_x_mm + (selected_max_x - selected_min_x if selected_x else 0.0)
     distribution_limit = loaded_width + 4.0 * depth_y_mm
     all_x = sorted({round(float(row.get("x_mm", 0.0)), 3) for row in records})
     spacing_limit = _min_positive_spacing_mm(all_x)
@@ -2436,7 +2436,8 @@ def plan_view(
     width_x_mm: float,
     depth_y_mm: float,
     pilecap_overhang_mm: float,
-    bearing_size_mm: float,
+    bearing_size_x_mm: float,
+    bearing_size_y_mm: float,
     selected_bearing_names: Iterable[str] | None = None,
     strip_center_x_mm: float | None = None,
     strip_width_x_mm: float | None = None,
@@ -2465,7 +2466,9 @@ def plan_view(
             opacity=0.42,
         )
 
-    half = bearing_size_mm / 2.0
+    half_x = bearing_size_x_mm / 2.0
+    half_y = bearing_size_y_mm / 2.0
+    bearing_plan_dim = max(bearing_size_x_mm, bearing_size_y_mm)
     selected_names = {str(name) for name in selected_bearing_names or []}
     for row in bearing_records:
         x = float(row.get("x_mm", 0.0))
@@ -2474,10 +2477,10 @@ def plan_view(
         is_selected = name in selected_names
         _add_rect(
             fig,
-            x0=x - half,
-            x1=x + half,
-            y0=y - half,
-            y1=y + half,
+            x0=x - half_x,
+            x1=x + half_x,
+            y0=y - half_y,
+            y1=y + half_y,
             fillcolor="#f59e0b" if is_selected else COLORS["bearing"],
             linecolor="#92400e" if is_selected else "#065f5b",
             opacity=0.98 if is_selected else 0.95,
@@ -2493,7 +2496,7 @@ def plan_view(
         for row_y, rows in sorted(row_groups.items(), key=lambda item: item[0], reverse=True)
     ]
     row_count = len(grouped_rows)
-    load_value_gap = max(half * 2.45, min(440.0, depth_y_mm * 0.34))
+    load_value_gap = max(max(half_x, half_y) * 2.45, min(440.0, depth_y_mm * 0.34))
     load_line_gap = LOAD_TABLE_LINE_GAP_MM
     load_components = [
         ("Pu_x", "Pu_x_kN", "kN", COLORS["axis_x"]),
@@ -2578,7 +2581,7 @@ def plan_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_size_mm * 2.20)
+    dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_plan_dim * 2.20)
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
     right_dim_x = abut_x + dim_gap * (2.60 if len(y_centers) > 1 else 1.65)
@@ -2665,14 +2668,16 @@ def front_view(
     height_z_mm: float,
     pilecap_overhang_mm: float,
     pilecap_thickness_mm: float,
-    bearing_size_mm: float,
+    bearing_size_x_mm: float,
+    bearing_size_y_mm: float,
 ) -> go.Figure:
     fig = go.Figure()
     bearing_records = list(bearings)
     pile_x = width_x_mm / 2.0 + pilecap_overhang_mm
     abut_x = width_x_mm / 2.0
-    half = bearing_size_mm / 2.0
-    bearing_h = max(80.0, bearing_size_mm * 0.28)
+    half_x = bearing_size_x_mm / 2.0
+    bearing_display_dim = max(bearing_size_x_mm, bearing_size_y_mm)
+    bearing_h = max(80.0, bearing_display_dim * 0.28)
 
     _add_rect(fig, x0=-pile_x, x1=pile_x, y0=-pilecap_thickness_mm, y1=0, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
     _add_rect(fig, x0=-abut_x, x1=abut_x, y0=0, y1=height_z_mm, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
@@ -2681,14 +2686,14 @@ def front_view(
         x = float(row.get("x_mm", 0.0))
         z = float(row.get("z_mm", height_z_mm))
         name = str(row.get("name", "B"))
-        _add_rect(fig, x0=x - half, x1=x + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
+        _add_rect(fig, x0=x - half_x, x1=x + half_x, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
         fig.add_annotation(x=x, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     front_force_max = _max_abs_component(bearing_records, ("Pu_x_kN", "Pu_z_kN"))
     arrow_max = min(max(max(width_x_mm, height_z_mm) * 0.055, 220.0), 500.0)
     arrow_min = min(110.0, arrow_max * 0.45)
-    moment_radius = max(155.0, bearing_size_mm * 0.82)
-    load_clearance = max(46.0, half * 0.42)
+    moment_radius = max(155.0, bearing_display_dim * 0.82)
+    load_clearance = max(46.0, half_x * 0.42)
     load_x_extents = [-pile_x, pile_x]
     load_z_extents = [-pilecap_thickness_mm, height_z_mm + bearing_h]
 
@@ -2838,7 +2843,7 @@ def front_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(360.0, min(width_x_mm, height_z_mm) * 0.12, bearing_size_mm * 2.00)
+    dim_gap = max(360.0, min(width_x_mm, height_z_mm) * 0.12, bearing_display_dim * 2.00)
     right_dim_x = abut_x + dim_gap * 1.65
     _add_dimension_line(
         fig,
@@ -3046,7 +3051,7 @@ def _add_side_earth_pressure_diagram(
         component_lines.append(f"q surcharge: {service_other:.1f} kN/m @ H/2")
     if service_live > 1e-9:
         component_lines.append(f"LS surcharge: {service_live:.1f} kN/m @ H/2")
-    summary_label_y = y_at(max_len + label_gap + 4200.0)
+    summary_label_y = y_at(max_len + label_gap + 5600.0)
     summary_label_z = resultant_z if resultant_z > 1e-9 else h_draw / 3.0
     _add_load_tag(
         fig,
@@ -3066,7 +3071,7 @@ def _add_side_earth_pressure_diagram(
         bordercolor="#334155",
     )
 
-    outer_y = y_at(max_len + label_gap + 4700.0)
+    outer_y = y_at(max_len + label_gap + 6100.0)
     load_y_extents.extend([face_y, y_at(max_len), outer_y])
     load_z_extents.extend([0.0, h_draw, h_draw + max(260.0, height_z_mm * 0.07), resultant_z, summary_label_z])
 
@@ -3231,7 +3236,8 @@ def side_view(
     height_z_mm: float,
     pilecap_overhang_mm: float,
     pilecap_thickness_mm: float,
-    bearing_size_mm: float,
+    bearing_size_x_mm: float,
+    bearing_size_y_mm: float,
     earth_pressure: EarthPressureSummary | None = None,
     approach_slab: ApproachSlabReactionSummary | None = None,
 ) -> go.Figure:
@@ -3239,8 +3245,9 @@ def side_view(
     bearing_records = list(bearings)
     pile_y = depth_y_mm / 2.0 + pilecap_overhang_mm
     abut_y = depth_y_mm / 2.0
-    half = bearing_size_mm / 2.0
-    bearing_h = max(80.0, bearing_size_mm * 0.28)
+    half_y = bearing_size_y_mm / 2.0
+    bearing_display_dim = max(bearing_size_x_mm, bearing_size_y_mm)
+    bearing_h = max(80.0, bearing_display_dim * 0.28)
 
     _add_rect(fig, x0=-pile_y, x1=pile_y, y0=-pilecap_thickness_mm, y1=0, fillcolor=COLORS["pilecap"], linecolor=COLORS["pilecap_line"], dash="dash", opacity=0.85)
     _add_rect(fig, x0=-abut_y, x1=abut_y, y0=0, y1=height_z_mm, fillcolor=COLORS["concrete"], linecolor=COLORS["concrete_line"])
@@ -3249,15 +3256,15 @@ def side_view(
         y = float(row.get("y_mm", 0.0))
         z = float(row.get("z_mm", height_z_mm))
         name = str(row.get("name", "B"))
-        _add_rect(fig, x0=y - half, x1=y + half, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
+        _add_rect(fig, x0=y - half_y, x1=y + half_y, y0=z, y1=z + bearing_h, fillcolor=COLORS["bearing"], linecolor="#065f5b")
         fig.add_annotation(x=y, y=z + bearing_h / 2.0, text=name, showarrow=False, font={"color": "white", "size": 11})
 
     side_force_max = _max_abs_component(bearing_records, ("Pu_y_kN", "Pu_z_kN"))
     base_arrow_max = min(max(max(depth_y_mm, height_z_mm) * 0.060, 210.0), 460.0)
     arrow_max = base_arrow_max * 4.0
     arrow_min = min(105.0, base_arrow_max * 0.45) * 4.0
-    moment_radius = max(310.0, bearing_size_mm * 1.64)
-    load_clearance = max(46.0, half * 0.42)
+    moment_radius = max(310.0, bearing_display_dim * 1.64)
+    load_clearance = max(46.0, half_y * 0.42)
     load_y_extents = [-pile_y, pile_y]
     load_z_extents = [-pilecap_thickness_mm, height_z_mm + bearing_h]
     if earth_pressure is not None:
@@ -3373,7 +3380,7 @@ def side_view(
     for row_index, (row_y, rows) in enumerate(grouped_rows):
         if not rows:
             continue
-        column_gap = max(2200.0, SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM * 3.4, bearing_size_mm * 8.8)
+        column_gap = max(2200.0, SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM * 3.4, bearing_display_dim * 8.8)
         table_span = column_gap * max(len(rows) - 1, 1)
         table_x_positions = [
             -table_span / 2.0 + index * column_gap
@@ -3432,7 +3439,7 @@ def side_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(360.0, min(depth_y_mm, height_z_mm) * 0.20, bearing_size_mm * 2.00)
+    dim_gap = max(360.0, min(depth_y_mm, height_z_mm) * 0.20, bearing_display_dim * 2.00)
     right_dim_y = max(abut_y + dim_gap, max(load_y_extents) + dim_gap * 0.25)
     _add_dimension_line(
         fig,
@@ -4026,6 +4033,8 @@ PROJECT_SETTING_DEFAULTS = {
     "depth_y_mm": 1200.0,
     "height_z_mm": 4500.0,
     "bearing_size_mm": 250.0,
+    "bearing_size_x_mm": 250.0,
+    "bearing_size_y_mm": 250.0,
     "pilecap_overhang_mm": 500.0,
     "pilecap_thickness_mm": 1500.0,
     "concrete_unit_weight_kn_m3": 24.0,
@@ -4121,6 +4130,11 @@ def apply_project_payload(payload: dict) -> None:
     settings = payload.get("settings", {})
     if not isinstance(settings, dict):
         raise ValueError("Project file is missing the settings object.")
+
+    if "bearing_size_x_mm" not in settings and "bearing_size_mm" in settings:
+        settings["bearing_size_x_mm"] = settings["bearing_size_mm"]
+    if "bearing_size_y_mm" not in settings and "bearing_size_mm" in settings:
+        settings["bearing_size_y_mm"] = settings["bearing_size_mm"]
 
     for key in PROJECT_SETTING_DEFAULTS:
         if key in settings:
@@ -4349,7 +4363,25 @@ with st.sidebar:
     width_x_mm = st.number_input("Abutment width along x (mm)", min_value=800.0, value=9000.0, step=100.0, key="width_x_mm")
     depth_y_mm = st.number_input("Abutment thickness along y (mm)", min_value=300.0, value=1200.0, step=50.0, key="depth_y_mm")
     height_z_mm = st.number_input("Bearing level height z (mm)", min_value=500.0, value=4500.0, step=100.0, key="height_z_mm")
-    bearing_size_mm = st.number_input("Bearing plan size (mm)", min_value=100.0, value=250.0, step=25.0, key="bearing_size_mm")
+    legacy_bearing_size_mm = float(st.session_state.get("bearing_size_mm", 250.0))
+    bearing_cols = st.columns(2)
+    with bearing_cols[0]:
+        bearing_size_x_mm = st.number_input(
+            "Bearing size along x (mm)",
+            min_value=100.0,
+            value=float(st.session_state.get("bearing_size_x_mm", legacy_bearing_size_mm)),
+            step=25.0,
+            key="bearing_size_x_mm",
+        )
+    with bearing_cols[1]:
+        bearing_size_y_mm = st.number_input(
+            "Bearing size along y (mm)",
+            min_value=100.0,
+            value=float(st.session_state.get("bearing_size_y_mm", legacy_bearing_size_mm)),
+            step=25.0,
+            key="bearing_size_y_mm",
+        )
+    st.session_state.bearing_size_mm = bearing_size_x_mm
     pilecap_overhang_mm = st.number_input("Pile cap overhang each side (mm)", min_value=0.0, value=500.0, step=50.0, key="pilecap_overhang_mm")
     pilecap_thickness_mm = st.number_input("Pile cap display thickness (mm)", min_value=300.0, value=1500.0, step=100.0, key="pilecap_thickness_mm")
     concrete_unit_weight_kn_m3 = st.number_input(
@@ -5108,7 +5140,7 @@ strip_info = effective_strip_recommendation(
     selected_names=selected_strength_names,
     full_width_x_mm=width_x_mm,
     depth_y_mm=depth_y_mm,
-    bearing_size_mm=bearing_size_mm,
+    bearing_size_x_mm=bearing_size_x_mm,
 )
 auto_strip_width_x_mm = strip_info["recommended_width_mm"]
 if strip_width_mode == "Full abutment width":
@@ -5118,8 +5150,8 @@ if strip_width_mode == "Full abutment width":
     strength_display_names = bearing_names
 elif strip_width_mode == "Manual strip width":
     with strip_cols[2]:
-        manual_strip_min = max(100.0, bearing_size_mm)
-        manual_strip_default = float(min(width_x_mm, max(auto_strip_width_x_mm, bearing_size_mm)))
+        manual_strip_min = max(100.0, bearing_size_x_mm)
+        manual_strip_default = float(min(width_x_mm, max(auto_strip_width_x_mm, bearing_size_x_mm)))
         if st.session_state.get("manual_strip_width_mm") is None:
             st.session_state.pop("manual_strip_width_mm", None)
         elif "manual_strip_width_mm" in st.session_state:
@@ -5254,7 +5286,8 @@ with tabs[0]:
                 width_x_mm=width_x_mm,
                 depth_y_mm=depth_y_mm,
                 pilecap_overhang_mm=pilecap_overhang_mm,
-                bearing_size_mm=bearing_size_mm,
+                bearing_size_x_mm=bearing_size_x_mm,
+                bearing_size_y_mm=bearing_size_y_mm,
                 selected_bearing_names=strength_display_names,
                 strip_center_x_mm=strength_strip_center_x_mm,
                 strip_width_x_mm=strength_design_width_x_mm,
@@ -5269,7 +5302,8 @@ with tabs[0]:
                 height_z_mm=height_z_mm,
                 pilecap_overhang_mm=pilecap_overhang_mm,
                 pilecap_thickness_mm=pilecap_thickness_mm,
-                bearing_size_mm=bearing_size_mm,
+                bearing_size_x_mm=bearing_size_x_mm,
+                bearing_size_y_mm=bearing_size_y_mm,
             ),
             width="stretch",
         )
@@ -5280,7 +5314,8 @@ with tabs[0]:
             height_z_mm=height_z_mm,
             pilecap_overhang_mm=pilecap_overhang_mm,
             pilecap_thickness_mm=pilecap_thickness_mm,
-            bearing_size_mm=bearing_size_mm,
+            bearing_size_x_mm=bearing_size_x_mm,
+            bearing_size_y_mm=bearing_size_y_mm,
             earth_pressure=earth_pressure_result,
             approach_slab=approach_slab_result,
         ),
@@ -5824,7 +5859,7 @@ with tabs[4]:
         where:
 
         `beff` = effective width used in the strength section  
-        `l_loaded` = loaded bearing/group width in x, taken as bearing size plus the distance between the outermost selected bearings  
+`l_loaded` = loaded bearing/group width in x, taken as bearing size in x plus the distance between the outermost selected bearings  
         `t` = abutment thickness along y  
         `b_trib` = tributary/edge width in x. At an exterior bearing line, the edge side uses the distance
         from the abutment/pier free edge to the center of the outermost bearing; the interior side uses
