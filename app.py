@@ -13,7 +13,9 @@ import streamlit as st
 
 Axis = Literal["x", "y"]
 REBAR_DIAMETERS_MM = [12.0, 16.0, 20.0, 25.0, 28.0, 32.0]
+SHEAR_REBAR_DIAMETERS_MM = [10.0, 12.0, 16.0, 20.0, 25.0]
 REBAR_FY_BY_DIA_MPA = {
+    10.0: 390.0,
     12.0: 390.0,
     16.0: 390.0,
     20.0: 390.0,
@@ -317,6 +319,35 @@ class SectionCheck:
     bars: list[Bar]
 
 
+@dataclass(frozen=True)
+class ShearCheckSummary:
+    name: str
+    axis: str
+    code_basis: str
+    vu_kn: float
+    bw_mm: float
+    d_mm: float
+    phi_v: float
+    vc_kn: float
+    phi_vc_kn: float
+    vs_required_kn: float
+    avs_strength_mm2_per_m: float
+    avs_min_mm2_per_m: float
+    avs_required_mm2_per_m: float
+    tie_dia_mm: float
+    tie_legs: int
+    tie_area_mm2: float
+    spacing_required_mm: float
+    spacing_code_max_mm: float
+    spacing_recommended_mm: float
+    spacing_provided_mm: float
+    avs_provided_mm2_per_m: float
+    phi_vn_provided_kn: float
+    utilization: float
+    status: str
+    notes: str
+
+
 def default_code_parameters(code_name: str) -> CodeParameters:
     if "AASHTO" in code_name.upper():
         return CodeParameters(
@@ -343,6 +374,135 @@ def beta1_aci(fc_mpa: float) -> float:
 
 def bar_area_mm2(diameter_mm: float) -> float:
     return math.pi * diameter_mm**2 / 4.0
+
+
+def _round_down_spacing_mm(value: float, increment: float = 25.0) -> float:
+    if not math.isfinite(value) or value <= 0.0:
+        return math.inf
+    return max(increment, math.floor(value / increment) * increment)
+
+
+def shear_design_style_parameters(code_name: str, fc_mpa: float) -> dict[str, float | str]:
+    if "AASHTO" in code_name.upper():
+        return {
+            "basis": "AASHTO LRFD style simplified shear: phi_v=0.90, beta=2.0 preliminary MCFT-style Vc",
+            "phi_v": 0.90,
+            "vc_coeff": 0.083 * 2.0,
+            "min_sqrt_coeff": 0.083,
+            "min_mpa_coeff": 0.35,
+            "vs_limit_kn_coeff": 0.25 * max(float(fc_mpa), 0.0),
+            "max_spacing_regular_factor": 0.80,
+            "max_spacing_regular_cap_mm": 600.0,
+            "max_spacing_high_factor": 0.40,
+            "max_spacing_high_cap_mm": 300.0,
+            "high_shear_ratio": 0.50,
+        }
+    return {
+        "basis": "ACI 318 style simplified one-way shear: phi_v=0.75, Vc=0.17 sqrt(fc') bw d",
+        "phi_v": 0.75,
+        "vc_coeff": 0.17,
+        "min_sqrt_coeff": 0.062,
+        "min_mpa_coeff": 0.35,
+        "vs_limit_kn_coeff": 0.66 * math.sqrt(max(float(fc_mpa), 0.0)),
+        "max_spacing_regular_factor": 0.50,
+        "max_spacing_regular_cap_mm": 600.0,
+        "max_spacing_high_factor": 0.25,
+        "max_spacing_high_cap_mm": 300.0,
+        "high_shear_ratio": 0.50,
+    }
+
+
+def shear_check_summary(
+    *,
+    name: str,
+    axis: str,
+    vu_kn: float,
+    bw_mm: float,
+    d_mm: float,
+    fc_mpa: float,
+    fyt_mpa: float,
+    code_name: str,
+    tie_dia_mm: float,
+    tie_legs: int,
+    spacing_provided_mm: float,
+) -> ShearCheckSummary:
+    vu = abs(float(vu_kn))
+    bw = max(float(bw_mm), 1.0)
+    d = max(float(d_mm), 1.0)
+    fc = max(float(fc_mpa), 0.0)
+    fyt = max(float(fyt_mpa), 1.0)
+    params = shear_design_style_parameters(code_name, fc)
+    phi_v = float(params["phi_v"])
+    sqrt_fc = math.sqrt(fc)
+    vc = float(params["vc_coeff"]) * sqrt_fc * bw * d / 1000.0
+    phi_vc = phi_v * vc
+    vs_required = max(vu / max(phi_v, 1e-9) - vc, 0.0)
+    avs_strength = vs_required * 1_000_000.0 / max(fyt * d, 1e-9)
+    min_required = vu > 0.5 * phi_vc
+    avs_min = 0.0
+    if min_required:
+        avs_min = max(
+            float(params["min_sqrt_coeff"]) * sqrt_fc * bw / fyt,
+            float(params["min_mpa_coeff"]) * bw / fyt,
+        ) * 1000.0
+    avs_required = max(avs_strength, avs_min)
+    tie_area = max(int(tie_legs), 0) * bar_area_mm2(float(tie_dia_mm))
+    spacing_required = tie_area * 1000.0 / avs_required if avs_required > 1e-9 else math.inf
+    regular_max = min(float(params["max_spacing_regular_factor"]) * d, float(params["max_spacing_regular_cap_mm"]))
+    high_max = min(float(params["max_spacing_high_factor"]) * d, float(params["max_spacing_high_cap_mm"]))
+    spacing_code_max = high_max if vs_required > float(params["high_shear_ratio"]) * max(vc, 1e-9) else regular_max
+    spacing_recommended = min(spacing_required, spacing_code_max)
+    spacing_recommended = _round_down_spacing_mm(spacing_recommended)
+    spacing_provided = max(float(spacing_provided_mm), 1.0)
+    avs_provided = tie_area * 1000.0 / spacing_provided
+    vs_provided = (avs_provided / 1000.0) * fyt * d / 1000.0
+    phi_vn = phi_v * (vc + vs_provided)
+    utilization = vu / max(phi_vn, 1e-9)
+
+    nominal_limit = float(params["vs_limit_kn_coeff"]) * bw * d / 1000.0
+    section_limit_ok = vs_required <= nominal_limit if "AASHTO" not in code_name.upper() else (vc + vs_required) <= nominal_limit
+    spacing_ok = spacing_provided <= spacing_code_max + 1e-9
+    strength_ok = vu <= phi_vn + 1e-9
+    min_ok = (not min_required) or avs_provided >= avs_min - 1e-9
+    status = "OK" if strength_ok and min_ok and spacing_ok and section_limit_ok else "NG"
+    notes = []
+    if min_required:
+        notes.append("minimum shear reinforcement applies")
+    else:
+        notes.append("minimum shear reinforcement not triggered by Vu <= 0.5 phi Vc")
+    if not section_limit_ok:
+        notes.append("section shear limit exceeded; increase section size/strength")
+    if not spacing_ok:
+        notes.append("provided spacing exceeds code-style maximum")
+    if "AASHTO" in code_name.upper():
+        notes.append("AASHTO full shear design should verify theta/beta by current LRFD provisions")
+    return ShearCheckSummary(
+        name=name,
+        axis=axis,
+        code_basis=str(params["basis"]),
+        vu_kn=vu,
+        bw_mm=bw,
+        d_mm=d,
+        phi_v=phi_v,
+        vc_kn=vc,
+        phi_vc_kn=phi_vc,
+        vs_required_kn=vs_required,
+        avs_strength_mm2_per_m=avs_strength,
+        avs_min_mm2_per_m=avs_min,
+        avs_required_mm2_per_m=avs_required,
+        tie_dia_mm=float(tie_dia_mm),
+        tie_legs=int(tie_legs),
+        tie_area_mm2=tie_area,
+        spacing_required_mm=spacing_required,
+        spacing_code_max_mm=spacing_code_max,
+        spacing_recommended_mm=spacing_recommended,
+        spacing_provided_mm=spacing_provided,
+        avs_provided_mm2_per_m=avs_provided,
+        phi_vn_provided_kn=phi_vn,
+        utilization=utilization,
+        status=status,
+        notes="; ".join(notes),
+    )
 
 
 def clear_spacing_by_face_mm(
@@ -3550,6 +3710,9 @@ PROJECT_SETTING_DEFAULTS = {
     "bar_dia_mm": 25.0,
     "bars_x_face": 12,
     "bars_y_face": 3,
+    "shear_tie_dia_mm": 12.0,
+    "shear_tie_legs": 2,
+    "shear_spacing_provided_mm": 200.0,
     "dia_options": [20.0, 25.0, 28.0, 32.0],
     "bearing_rows": 1,
     "bearings_per_row": 4,
@@ -4689,7 +4852,7 @@ else:
         design_error = str(exc)
 
 
-tabs = st.tabs(["Views", "Results", "Section", "Method"])
+tabs = st.tabs(["Views", "Results", "Section", "Shear", "Method"])
 
 with tabs[0]:
     view_cols = st.columns(2)
@@ -4734,7 +4897,7 @@ with tabs[0]:
 with tabs[1]:
     metric_row(resultant, check, strength_design_width_x_mm)
     st.markdown(
-        '<p class="small-note">Section design uses the displayed Pu, Mux, and Muy. Vx and Vy are reported as fixed-base force resultants only; shear design is intentionally outside this scope.</p>',
+        '<p class="small-note">Section design uses the displayed Pu, Mux, and Muy. Vx and Vy are checked separately in the Shear tab as preliminary sectional shear.</p>',
         unsafe_allow_html=True,
     )
     with st.expander("Section design demand breakdown", expanded=earth_pressure_result is not None):
@@ -4986,6 +5149,137 @@ with tabs[2]:
         st.dataframe(bar_table, width="stretch", hide_index=True)
 
 with tabs[3]:
+    st.subheader("Shear Check")
+    st.caption(
+        "Preliminary sectional shear check using the same code assumption selected in Design Basis. "
+        "Pile-cap one-way/punching shear and detailed AASHTO theta/beta MCFT design remain separate final-design checks."
+    )
+    shear_cols = st.columns(3)
+    with shear_cols[0]:
+        shear_tie_dia_mm = st.selectbox(
+            "Shear tie / stirrup diameter",
+            SHEAR_REBAR_DIAMETERS_MM,
+            index=SHEAR_REBAR_DIAMETERS_MM.index(12.0),
+            key="shear_tie_dia_mm",
+            format_func=lambda dia: f"{rebar_label(dia)} fy={rebar_fy_mpa(dia):.0f} MPa",
+        )
+    with shear_cols[1]:
+        shear_tie_legs = st.number_input(
+            "Number of shear legs",
+            min_value=1,
+            max_value=20,
+            value=2,
+            step=1,
+            key="shear_tie_legs",
+            help="Total legs crossing the shear crack per spacing line.",
+        )
+    with shear_cols[2]:
+        shear_spacing_provided_mm = st.number_input(
+            "Provided shear spacing s (mm)",
+            min_value=25.0,
+            max_value=1000.0,
+            value=200.0,
+            step=25.0,
+            key="shear_spacing_provided_mm",
+        )
+
+    shear_longitudinal_bar_dia = check.bar_dia_mm if check is not None else float(st.session_state.get("bar_dia_mm", 25.0))
+    shear_fyt_mpa = rebar_fy_mpa(float(shear_tie_dia_mm))
+    shear_d_y_mm = depth_y_mm - cover_mm - shear_longitudinal_bar_dia / 2.0
+    shear_d_x_mm = strength_design_width_x_mm - cover_mm - shear_longitudinal_bar_dia / 2.0
+    shear_checks = [
+        shear_check_summary(
+            name="Strength section shear Vy",
+            axis="Vy / Mux direction",
+            vu_kn=resultant.vy_kn,
+            bw_mm=strength_design_width_x_mm,
+            d_mm=shear_d_y_mm,
+            fc_mpa=fc_mpa,
+            fyt_mpa=shear_fyt_mpa,
+            code_name=code_choice,
+            tie_dia_mm=float(shear_tie_dia_mm),
+            tie_legs=int(shear_tie_legs),
+            spacing_provided_mm=shear_spacing_provided_mm,
+        ),
+        shear_check_summary(
+            name="Strength section shear Vx",
+            axis="Vx / Muy direction",
+            vu_kn=resultant.vx_kn,
+            bw_mm=depth_y_mm,
+            d_mm=shear_d_x_mm,
+            fc_mpa=fc_mpa,
+            fyt_mpa=shear_fyt_mpa,
+            code_name=code_choice,
+            tie_dia_mm=float(shear_tie_dia_mm),
+            tie_legs=int(shear_tie_legs),
+            spacing_provided_mm=shear_spacing_provided_mm,
+        ),
+    ]
+    if stem_design_result is not None:
+        shear_checks.append(
+            shear_check_summary(
+                name="Abutment stem 1 m strip shear",
+                axis="Earth-pressure Vy per m",
+                vu_kn=stem_design_result.vu_kN_per_m,
+                bw_mm=1000.0,
+                d_mm=stem_design_result.effective_depth_mm,
+                fc_mpa=fc_mpa,
+                fyt_mpa=shear_fyt_mpa,
+                code_name=code_choice,
+                tie_dia_mm=float(shear_tie_dia_mm),
+                tie_legs=int(shear_tie_legs),
+                spacing_provided_mm=shear_spacing_provided_mm,
+            )
+        )
+
+    shear_table = pd.DataFrame(
+        [
+            {
+                "Check": item.name,
+                "Axis": item.axis,
+                "Status": item.status,
+                "Vu": f"{item.vu_kn:,.2f} kN",
+                "phi Vc": f"{item.phi_vc_kn:,.2f} kN",
+                "Vs req": f"{item.vs_required_kn:,.2f} kN",
+                "Av/s req": f"{item.avs_required_mm2_per_m:,.0f} mm2/m",
+                "s req": "N/A" if not math.isfinite(item.spacing_required_mm) else f"{item.spacing_required_mm:,.0f} mm",
+                "s max": f"{item.spacing_code_max_mm:,.0f} mm",
+                "s recommended": "N/A" if not math.isfinite(item.spacing_recommended_mm) else f"{item.spacing_recommended_mm:,.0f} mm",
+                "s provided": f"{item.spacing_provided_mm:,.0f} mm",
+                "phi Vn provided": f"{item.phi_vn_provided_kn:,.2f} kN",
+                "U": f"{item.utilization:.3f}",
+            }
+            for item in shear_checks
+        ]
+    )
+    st.dataframe(shear_table, width="stretch", hide_index=True)
+    if any(item.status != "OK" for item in shear_checks):
+        st.warning("At least one shear check is NG. Reduce spacing, increase shear legs/bar size, or increase section dimensions.")
+
+    with st.expander("Shear calculation details", expanded=False):
+        detail_rows = []
+        for item in shear_checks:
+            detail_rows.extend(
+                [
+                    [item.name, "code basis", item.code_basis, ""],
+                    [item.name, "section bw x d", f"{item.bw_mm:,.0f} x {item.d_mm:,.0f}", "mm"],
+                    [item.name, "phi_v", f"{item.phi_v:.2f}", ""],
+                    [item.name, "Vc nominal", f"{item.vc_kn:,.2f}", "kN"],
+                    [item.name, "Av/s strength", f"{item.avs_strength_mm2_per_m:,.0f}", "mm2/m"],
+                    [item.name, "Av/s minimum", f"{item.avs_min_mm2_per_m:,.0f}", "mm2/m"],
+                    [item.name, "provided shear steel", f"{item.tie_legs} legs {rebar_label(item.tie_dia_mm)} @ {item.spacing_provided_mm:,.0f}", "mm"],
+                    [item.name, "Av/s provided", f"{item.avs_provided_mm2_per_m:,.0f}", "mm2/m"],
+                    [item.name, "notes", item.notes, ""],
+                ]
+            )
+        st.dataframe(pd.DataFrame(detail_rows, columns=["Check", "Item", "Value", "Unit"]), width="stretch", hide_index=True)
+    st.info(
+        "For wall/pier shear, Vy is checked with the selected strength width and wall thickness d. "
+        "Vx is checked in the orthogonal direction. For abutments, an additional 1 m stem strip shear check is shown from earth pressure only."
+    )
+
+
+with tabs[4]:
     st.markdown(
         """
         **Coordinate and sign convention**
@@ -5101,6 +5395,19 @@ with tabs[3]:
         `phi flexure` value to estimate required vertical steel and a spacing guide. This stem strip design is separate
         from the PMM section check because it is a preliminary 1 m vertical-flexure design from earth pressure only,
         while the PMM section check combines the selected bearing strip with proportional earth-pressure `Mu_x`.
+
+        **Shear check**
+
+        The Shear tab checks the selected strength section in both plan directions:
+
+        `Vy` uses the selected strength width as `bw` and the wall thickness direction as `d`.  
+        `Vx` uses the wall thickness as `bw` and the selected strength width direction as `d`.
+
+        For Abutment mode, a separate `1 m` stem strip shear check is also reported from earth-pressure `Vy / Lx`.
+        ACI style uses a simplified `Vc = 0.17 sqrt(fc') bw d` with `phi_v = 0.75`. AASHTO style uses a simplified
+        preliminary `phi_v = 0.90` shear check and should be verified with the project AASHTO LRFD theta/beta method
+        for final design. Required shear reinforcement is reported as `Av/s`, with recommended spacing based on the
+        selected tie diameter and number of legs.
 
         The `Mu_x / Lx` value is a distributed line couple along the wall length. It is theoretically usable when the
         pile-cap analysis model accepts a wall-line moment/couple input. It is not a vertical line load in `kN/m`.
