@@ -993,10 +993,14 @@ def pilecap_base_force_summary_table(
     earth_pressure: EarthPressureSummary | None = None,
 ) -> pd.DataFrame:
     width_m = max(float(width_x_mm) / 1000.0, 1e-9)
-    dead_load_pu_kn = dead_load.uls_pu_z_kn if dead_load is not None else 0.0
-    backfill_pu_kn = backfill_vertical.uls_pu_z_kn if backfill_vertical is not None else 0.0
-    approach_slab_pu_kn = approach_slab.uls_pu_z_kn if approach_slab is not None else 0.0
-    total_pu_kn = resultant.pu_kn + dead_load_pu_kn + backfill_pu_kn + approach_slab_pu_kn
+    totals = pilecap_resultant_totals(
+        resultant,
+        dead_load=dead_load,
+        backfill_vertical=backfill_vertical,
+        approach_slab=approach_slab,
+        earth_pressure=earth_pressure,
+    )
+    total_pu_kn = totals["total_pu_uls_kn"]
     rows = [
         {
             "Resultant for pile cap": "Pu_z from bearings",
@@ -1087,7 +1091,7 @@ def pilecap_base_force_summary_table(
         }
     )
     if earth_pressure is not None:
-        total_vy_kn = resultant.vy_kn + earth_pressure.uls_vy_kn
+        total_vy_kn = totals["total_vy_uls_kn"]
         rows.extend(
             [
                 {
@@ -1163,17 +1167,8 @@ def pilecap_base_force_summary_table(
             }
         )
     if earth_pressure is not None or backfill_vertical is not None or approach_slab is not None:
-        total_mux_knm = resultant.mux_knm
-        mux_basis = ["bearing Mu_x"]
-        if earth_pressure is not None:
-            total_mux_knm += earth_pressure.uls_mux_knm
-            mux_basis.append("earth pressure Mu_x")
-        if backfill_vertical is not None:
-            total_mux_knm += backfill_vertical.uls_mux_knm
-            mux_basis.append("backfill EV eccentricity")
-        if approach_slab is not None:
-            total_mux_knm += approach_slab.uls_mux_knm
-            mux_basis.append("approach slab eccentricity")
+        total_mux_knm = totals["total_mux_uls_knm"]
+        mux_basis = list(totals["mux_basis"])
         rows.append(
             {
                 "Resultant for pile cap": "Total Mu_x for pile cap ULS",
@@ -1190,9 +1185,83 @@ def pilecap_base_force_summary_table(
                 "Linearized over x width": "Use point couple",
                 "Basis": "sum(Mu_y + (z Pu_x + x Pu_z) / 1000)",
             },
+            {
+                "Resultant for pile cap": "Total Mu_y for pile cap ULS",
+                "Point at centroid": f"{totals['total_muy_uls_knm']:,.2f} kN-m",
+                "Linearized over x width": "Use point couple",
+                "Basis": "bearing Mu_y only in current pile-cap summary assumptions",
+            },
         ]
     )
     return pd.DataFrame(rows)
+
+
+def pilecap_resultant_totals(
+    resultant: BearingResultant,
+    *,
+    dead_load: DeadLoadSummary | None = None,
+    backfill_vertical: BackfillVerticalLoadSummary | None = None,
+    approach_slab: ApproachSlabReactionSummary | None = None,
+    earth_pressure: EarthPressureSummary | None = None,
+) -> dict[str, float | list[str]]:
+    dead_load_pu_kn = dead_load.uls_pu_z_kn if dead_load is not None else 0.0
+    backfill_pu_kn = backfill_vertical.uls_pu_z_kn if backfill_vertical is not None else 0.0
+    approach_slab_pu_kn = approach_slab.uls_pu_z_kn if approach_slab is not None else 0.0
+    earth_vy_kn = earth_pressure.uls_vy_kn if earth_pressure is not None else 0.0
+    earth_mux_knm = earth_pressure.uls_mux_knm if earth_pressure is not None else 0.0
+    backfill_mux_knm = backfill_vertical.uls_mux_knm if backfill_vertical is not None else 0.0
+    approach_slab_mux_knm = approach_slab.uls_mux_knm if approach_slab is not None else 0.0
+    mux_basis = ["bearing Mu_x"]
+    if earth_pressure is not None:
+        mux_basis.append("earth pressure Mu_x")
+    if backfill_vertical is not None:
+        mux_basis.append("backfill EV eccentricity")
+    if approach_slab is not None:
+        mux_basis.append("approach slab eccentricity")
+    return {
+        "total_pu_uls_kn": resultant.pu_kn + dead_load_pu_kn + backfill_pu_kn + approach_slab_pu_kn,
+        "total_vy_uls_kn": resultant.vy_kn + earth_vy_kn,
+        "total_mux_uls_knm": resultant.mux_knm + earth_mux_knm + backfill_mux_knm + approach_slab_mux_knm,
+        "total_muy_uls_knm": resultant.muy_knm,
+        "mux_basis": mux_basis,
+    }
+
+
+def pilecap_uls_sls_summary_table(
+    resultant: BearingResultant,
+    *,
+    dead_load: DeadLoadSummary | None = None,
+    backfill_vertical: BackfillVerticalLoadSummary | None = None,
+    approach_slab: ApproachSlabReactionSummary | None = None,
+    earth_pressure: EarthPressureSummary | None = None,
+    approx_factor: float = 1.35,
+) -> pd.DataFrame:
+    totals = pilecap_resultant_totals(
+        resultant,
+        dead_load=dead_load,
+        backfill_vertical=backfill_vertical,
+        approach_slab=approach_slab,
+        earth_pressure=earth_pressure,
+    )
+    factor = max(float(approx_factor), 1e-9)
+    return pd.DataFrame(
+        [
+            {
+                "Load level": "ULS",
+                "Total Pu_z for pile cap": f"{totals['total_pu_uls_kn']:,.2f} kN",
+                "Total Mu_x for pile cap": f"{totals['total_mux_uls_knm']:,.2f} kN-m",
+                "Total Mu_y for pile cap": f"{totals['total_muy_uls_knm']:,.2f} kN-m",
+                "Basis": "Calculated ULS resultant",
+            },
+            {
+                "Load level": f"Approx. SLS = ULS / {factor:.2f}",
+                "Total Pu_z for pile cap": f"{float(totals['total_pu_uls_kn']) / factor:,.2f} kN",
+                "Total Mu_x for pile cap": f"{float(totals['total_mux_uls_knm']) / factor:,.2f} kN-m",
+                "Total Mu_y for pile cap": f"{float(totals['total_muy_uls_knm']) / factor:,.2f} kN-m",
+                "Basis": "Approximate only for preliminary pile-load estimation",
+            },
+        ]
+    )
 
 
 def section_design_resultant_with_earth_pressure(
@@ -5425,6 +5494,22 @@ with tabs[1]:
             )
 
     st.subheader("Pile Cap Base Force Summary")
+    st.dataframe(
+        pilecap_uls_sls_summary_table(
+            global_resultant,
+            dead_load=dead_load_summary,
+            backfill_vertical=backfill_vertical_result,
+            approach_slab=approach_slab_result,
+            earth_pressure=earth_pressure_result,
+            approx_factor=1.35,
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    st.caption(
+        "Approx. SLS uses ULS / 1.35 only as a rough preliminary conversion for pile-load sizing. "
+        "It is convenient when the bearing table is entered as ULS, but it is not a substitute for a true service-load combination."
+    )
     pilecap_load_notes = []
     if earth_pressure_result is not None:
         pilecap_load_notes.append("selected lateral earth pressure")
