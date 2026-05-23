@@ -301,9 +301,11 @@ class SectionCheck:
     max_spacing_advisory_mm: float
     spacing_status: str
     phi_pmax_kn: float
+    phi_tension_kn: float
     phi_mnx_at_pu_knm: float
     phi_mny_at_pu_knm: float
     axial_ratio: float
+    tension_ratio: float
     mux_ratio: float
     muy_ratio: float
     biaxial_ratio: float
@@ -1264,32 +1266,73 @@ def pilecap_uls_sls_summary_table(
     )
 
 
-def section_design_resultant_with_earth_pressure(
+def section_design_resultant_with_generated_loads(
     bearing_resultant: BearingResultant,
-    earth_pressure: EarthPressureSummary | None,
+    *,
     design_width_x_mm: float,
-) -> tuple[BearingResultant, float, float, float]:
-    if earth_pressure is None:
-        return bearing_resultant, 0.0, 0.0, 0.0
+    full_width_x_mm: float,
+    include_generated_vertical_loads: bool,
+    dead_load: DeadLoadSummary | None = None,
+    backfill_vertical: BackfillVerticalLoadSummary | None = None,
+    approach_slab: ApproachSlabReactionSummary | None = None,
+    earth_pressure: EarthPressureSummary | None = None,
+) -> tuple[BearingResultant, dict[str, float]]:
+    """Add app-generated loads to the selected PMM design strip.
 
+    Bearing loads are already localized to the selected strip. App-generated
+    self-weight/EV/approach-slab/earth-pressure loads are full-width results,
+    so they are scaled by design strip width / full wall width before being
+    added to the PMM demand. Wall Pier mode passes None for backfill, approach
+    slab, and earth pressure by construction.
+    """
+    full_width_m = max(float(full_width_x_mm) / 1000.0, 1e-9)
     design_width_m = max(float(design_width_x_mm) / 1000.0, 0.0)
-    earth_width_m = max(float(earth_pressure.width_m), 1e-9)
-    width_ratio = min(1.0, design_width_m / earth_width_m)
-    earth_vy_kn = earth_pressure.uls_vy_kn * width_ratio
-    earth_mux_knm = earth_pressure.uls_mux_knm * width_ratio
-    return (
-        BearingResultant(
-            pu_kn=bearing_resultant.pu_kn,
-            vx_kn=bearing_resultant.vx_kn,
-            vy_kn=bearing_resultant.vy_kn + earth_vy_kn,
-            mux_knm=bearing_resultant.mux_knm + earth_mux_knm,
-            muy_knm=bearing_resultant.muy_knm,
-            torsion_z_knm=bearing_resultant.torsion_z_knm,
-        ),
-        width_ratio,
-        earth_vy_kn,
-        earth_mux_knm,
+    vertical_width_ratio = min(1.0, design_width_m / full_width_m)
+
+    earth_width_ratio = 0.0
+    earth_vy_kn = 0.0
+    earth_mux_knm = 0.0
+    if earth_pressure is not None:
+        earth_width_m = max(float(earth_pressure.width_m), 1e-9)
+        earth_width_ratio = min(1.0, design_width_m / earth_width_m)
+        earth_vy_kn = earth_pressure.uls_vy_kn * earth_width_ratio
+        earth_mux_knm = earth_pressure.uls_mux_knm * earth_width_ratio
+
+    dead_pu_kn = 0.0
+    backfill_pu_kn = 0.0
+    backfill_mux_knm = 0.0
+    approach_pu_kn = 0.0
+    approach_mux_knm = 0.0
+    if include_generated_vertical_loads:
+        if dead_load is not None:
+            dead_pu_kn = dead_load.uls_pu_z_kn * vertical_width_ratio
+        if backfill_vertical is not None:
+            backfill_pu_kn = backfill_vertical.uls_pu_z_kn * vertical_width_ratio
+            backfill_mux_knm = backfill_vertical.uls_mux_knm * vertical_width_ratio
+        if approach_slab is not None:
+            approach_pu_kn = approach_slab.uls_pu_z_kn * vertical_width_ratio
+            approach_mux_knm = approach_slab.uls_mux_knm * vertical_width_ratio
+
+    resultant = BearingResultant(
+        pu_kn=bearing_resultant.pu_kn + dead_pu_kn + backfill_pu_kn + approach_pu_kn,
+        vx_kn=bearing_resultant.vx_kn,
+        vy_kn=bearing_resultant.vy_kn + earth_vy_kn,
+        mux_knm=bearing_resultant.mux_knm + earth_mux_knm + backfill_mux_knm + approach_mux_knm,
+        muy_knm=bearing_resultant.muy_knm,
+        torsion_z_knm=bearing_resultant.torsion_z_knm,
     )
+    additions = {
+        "vertical_width_ratio": vertical_width_ratio,
+        "earth_width_ratio": earth_width_ratio,
+        "dead_pu_kn": dead_pu_kn,
+        "backfill_pu_kn": backfill_pu_kn,
+        "backfill_mux_knm": backfill_mux_knm,
+        "approach_pu_kn": approach_pu_kn,
+        "approach_mux_knm": approach_mux_knm,
+        "earth_vy_kn": earth_vy_kn,
+        "earth_mux_knm": earth_mux_knm,
+    }
+    return resultant, additions
 
 
 def _min_positive_spacing_mm(values: Iterable[float]) -> float:
@@ -1603,6 +1646,46 @@ def _phi_pmax_kn(
     return params.axial_cap_factor * params.phi_compression * po_n / 1000.0
 
 
+def _phi_tension_kn(
+    bars: list[Bar],
+    fy_mpa: float,
+    params: CodeParameters,
+) -> float:
+    """Design axial tension capacity of longitudinal reinforcement only.
+
+    Compression is positive in this app; net uplift/tension demand is negative Pu.
+    Concrete tensile strength is intentionally ignored for ULS tension capacity.
+    """
+    ast = sum(bar.area_mm2 for bar in bars)
+    return params.phi_flexure * fy_mpa * ast / 1000.0
+
+
+def _clip_pmm_point_to_pmax(response: dict[str, float], pmax_kn: float) -> dict[str, float]:
+    """Avoid artificial moment capacity after the axial compression cap is reached.
+
+    The phi Pmax cap is a pure-compression limit. If a strain-compatibility
+    sample lies above the cap, map it to the cap with zero moment instead of
+    keeping the sampled moment at capped P. This is conservative and prevents
+    fake capacity at/near phi Pmax.
+    """
+    if response["phi_pn_kn"] >= pmax_kn:
+        return {
+            "phi_pn_kn": pmax_kn,
+            "phi_mx_knm": 0.0,
+            "phi_my_knm": 0.0,
+            "phi_mn_knm": 0.0,
+            "phi": response.get("phi", math.nan),
+            "eps_t": response.get("eps_t", 0.0),
+        }
+    return {
+        "phi_pn_kn": response["phi_pn_kn"],
+        "phi_mx_knm": response.get("phi_mx_knm", 0.0),
+        "phi_my_knm": response.get("phi_my_knm", 0.0),
+        "phi": response.get("phi", math.nan),
+        "eps_t": response.get("eps_t", 0.0),
+    }
+
+
 def shrinkage_temperature_ratio(code_name: str, fy_mpa: float) -> tuple[float, str]:
     if "AASHTO" in code_name.upper():
         # AASHTO style As >= 0.11 Ag / fy with fy in ksi; 0.11 * 6.89476 = 0.75842 for MPa.
@@ -1672,8 +1755,10 @@ def interaction_curve(
     max_dim = max(width_x_mm, depth_y_mm)
     c_values = np.geomspace(max(1.0, max_dim / 1000.0), max_dim * 80.0, sample_count)
     pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
+    ptension = _phi_tension_kn(bars, fy_mpa, params)
 
     curve: list[dict[str, float]] = []
+    curve.append({"phi_pn_kn": -ptension, "phi_mn_knm": 0.0, "phi": params.phi_flexure, "eps_t": math.inf})
     for c_mm in c_values:
         response = _section_response(
             width_x_mm=width_x_mm,
@@ -1686,14 +1771,14 @@ def interaction_curve(
             theta_rad=theta,
             params=params,
         )
-        phi_pn = min(response["phi_pn_kn"], pmax)
+        clipped = _clip_pmm_point_to_pmax(response, pmax)
         moment_key = "phi_mx_knm" if axis == "x" else "phi_my_knm"
         curve.append(
             {
-                "phi_pn_kn": phi_pn,
-                "phi_mn_knm": abs(response[moment_key]),
-                "phi": response["phi"],
-                "eps_t": response["eps_t"],
+                "phi_pn_kn": clipped["phi_pn_kn"],
+                "phi_mn_knm": abs(clipped[moment_key]),
+                "phi": clipped["phi"],
+                "eps_t": clipped["eps_t"],
             }
         )
 
@@ -1766,6 +1851,7 @@ def pmm_surface_check(
     sample_count: int = 84,
 ) -> dict:
     pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
+    ptension = _phi_tension_kn(bars, fy_mpa, params)
     max_dim = max(width_x_mm, depth_y_mm)
     c_values = np.geomspace(max(1.0, max_dim / 1000.0), max_dim * 80.0, sample_count)
     theta_values = np.linspace(0.0, 2.0 * math.pi, angle_count, endpoint=False)
@@ -1780,6 +1866,11 @@ def pmm_surface_check(
         row_mx: list[float] = []
         row_my: list[float] = []
         row_p: list[float] = []
+        pure_tension_point = {"theta": float(theta), "phi_pn_kn": -ptension, "phi_mx_knm": 0.0, "phi_my_knm": 0.0}
+        curve.append(pure_tension_point)
+        row_mx.append(0.0)
+        row_my.append(0.0)
+        row_p.append(-ptension)
         for c_mm in c_values:
             response = _section_response(
                 width_x_mm=width_x_mm,
@@ -1792,9 +1883,10 @@ def pmm_surface_check(
                 theta_rad=float(theta),
                 params=params,
             )
-            phi_pn = min(response["phi_pn_kn"], pmax)
-            mx = response["phi_mx_knm"]
-            my = response["phi_my_knm"]
+            clipped = _clip_pmm_point_to_pmax(response, pmax)
+            phi_pn = clipped["phi_pn_kn"]
+            mx = clipped["phi_mx_knm"]
+            my = clipped["phi_my_knm"]
             point = {"theta": float(theta), "phi_pn_kn": phi_pn, "phi_mx_knm": mx, "phi_my_knm": my}
             curve.append(point)
             row_mx.append(mx)
@@ -1897,6 +1989,7 @@ def analyze_section(
     )
     spacing_status = "OK" if max_spacing <= max_spacing_advisory_mm else "NG"
     pmax = _phi_pmax_kn(width_x_mm, depth_y_mm, bars, fc_mpa, fy_mpa, params)
+    ptension = _phi_tension_kn(bars, fy_mpa, params)
     curve_x = interaction_curve(
         width_x_mm=width_x_mm,
         depth_y_mm=depth_y_mm,
@@ -1921,7 +2014,8 @@ def analyze_section(
     )
     cap_x = _capacity_at_pu(curve_x, pu_kn)
     cap_y = _capacity_at_pu(curve_y, pu_kn)
-    axial_ratio = pu_kn / pmax if pmax > 0 else math.inf
+    axial_ratio = max(pu_kn, 0.0) / pmax if pmax > 0 else math.inf
+    tension_ratio = abs(min(pu_kn, 0.0)) / ptension if ptension > 0 else math.inf
     mux_ratio = abs(mux_knm) / cap_x if cap_x > 0 else math.inf
     muy_ratio = abs(muy_knm) / cap_y if cap_y > 0 else math.inf
     biaxial_linear_ratio = mux_ratio + muy_ratio
@@ -1952,7 +2046,7 @@ def analyze_section(
         biaxial_ratio = load_contour_ratio
     else:
         biaxial_ratio = biaxial_linear_ratio
-    governing_ratio = max(axial_ratio, biaxial_ratio)
+    governing_ratio = max(axial_ratio, tension_ratio, biaxial_ratio)
     status = "OK" if governing_ratio <= 1.0 else "NG"
 
     return SectionCheck(
@@ -1974,9 +2068,11 @@ def analyze_section(
         max_spacing_advisory_mm=max_spacing_advisory_mm,
         spacing_status=spacing_status,
         phi_pmax_kn=pmax,
+        phi_tension_kn=ptension,
         phi_mnx_at_pu_knm=cap_x,
         phi_mny_at_pu_knm=cap_y,
         axial_ratio=axial_ratio,
+        tension_ratio=tension_ratio,
         mux_ratio=mux_ratio,
         muy_ratio=muy_ratio,
         biaxial_ratio=biaxial_ratio,
@@ -2058,7 +2154,7 @@ def find_reinforcement(
                 sample_count=sample_count,
             )
             if biaxial_method == PMM_METHOD:
-                if check.axial_ratio > 1.0 or check.mux_ratio > 1.0 or check.muy_ratio > 1.0:
+                if check.axial_ratio > 1.0 or check.tension_ratio > 1.0 or check.mux_ratio > 1.0 or check.muy_ratio > 1.0:
                     continue
                 check = analyze_section(
                     width_x_mm=width_x_mm,
@@ -4110,6 +4206,7 @@ PROJECT_SETTING_DEFAULTS = {
     "include_earth_pressure": True,
     "include_backfill_ev": True,
     "include_approach_slab_reaction": True,
+    "include_generated_loads_in_pmm": True,
     "earth_load_code": "AASHTO LRFD Strength I",
     "earth_backfill_height_m": 4.5,
     "backfill_ev_width_m": 0.50,
@@ -4284,13 +4381,14 @@ def metric_row(resultant, check, design_width_x_mm: float | None = None):
     cols[5].metric("Tz resultant", f"{resultant.torsion_z_knm:,.0f} kN-m")
 
     if check is not None:
-        cols = st.columns(6)
+        cols = st.columns(7)
         cols[0].metric("phi Pmax", f"{check.phi_pmax_kn:,.0f} kN")
-        cols[1].metric("phi Mnx at Pu", f"{check.phi_mnx_at_pu_knm:,.0f} kN-m")
-        cols[2].metric("phi Mny at Pu", f"{check.phi_mny_at_pu_knm:,.0f} kN-m")
-        cols[3].metric("As provided", f"{check.as_total_mm2:,.0f} mm2")
-        cols[4].metric("rho", f"{check.rho_percent:.3f} %")
-        cols[5].metric(
+        cols[1].metric("phi Tn", f"{check.phi_tension_kn:,.0f} kN")
+        cols[2].metric("phi Mnx at Pu", f"{check.phi_mnx_at_pu_knm:,.0f} kN-m")
+        cols[3].metric("phi Mny at Pu", f"{check.phi_mny_at_pu_knm:,.0f} kN-m")
+        cols[4].metric("As provided", f"{check.as_total_mm2:,.0f} mm2")
+        cols[5].metric("rho", f"{check.rho_percent:.3f} %")
+        cols[6].metric(
             "design width",
             f"{design_width_x_mm if design_width_x_mm is not None else check.width_x_mm:,.0f} mm",
             delta=f"max c/c {check.max_center_spacing_mm:,.0f} mm",
@@ -4460,6 +4558,15 @@ with st.sidebar:
         value=24.0,
         step=0.5,
         key="concrete_unit_weight_kn_m3",
+    )
+    include_generated_loads_in_pmm = st.checkbox(
+        "Include app-generated vertical loads in PMM section check",
+        value=True,
+        key="include_generated_loads_in_pmm",
+        help=(
+            "Adds self-weight to the PMM demand. In Abutment mode it can also add generated EV and "
+            "approach slab vertical reactions. Wall Pier mode never adds earth pressure, EV, or approach slab loads."
+        ),
     )
 
     earth_pressure_factor_candidates: list[EarthPressureFactors] = []
@@ -5250,11 +5357,19 @@ else:
 
 strength_records = localize_bearing_records(strength_records_global, strength_strip_center_x_mm)
 bearing_resultant = combine_bearing_loads(strength_records)
-resultant, earth_design_width_ratio, earth_design_vy_kn, earth_design_mux_knm = section_design_resultant_with_earth_pressure(
+resultant, section_load_additions = section_design_resultant_with_generated_loads(
     bearing_resultant,
-    earth_pressure_result,
-    strength_design_width_x_mm,
+    design_width_x_mm=strength_design_width_x_mm,
+    full_width_x_mm=width_x_mm,
+    include_generated_vertical_loads=include_generated_loads_in_pmm,
+    dead_load=dead_load_summary,
+    backfill_vertical=backfill_vertical_result,
+    approach_slab=approach_slab_result,
+    earth_pressure=earth_pressure_result,
 )
+earth_design_width_ratio = section_load_additions["earth_width_ratio"]
+earth_design_vy_kn = section_load_additions["earth_vy_kn"]
+earth_design_mux_knm = section_load_additions["earth_mux_knm"]
 spacing_text = (
     f"{strip_info['spacing_limit_mm']:,.0f} mm"
     if math.isfinite(strip_info["spacing_limit_mm"])
@@ -5284,9 +5399,25 @@ if earth_pressure_result is not None:
         f"Mux = {earth_design_mux_knm:,.2f} kN-m "
         f"({earth_design_width_ratio:.1%} of full-width earth pressure)."
     )
+if include_generated_loads_in_pmm:
+    generated_items = [f"self-weight Pu = {section_load_additions['dead_pu_kn']:,.2f} kN"]
+    if backfill_vertical_result is not None:
+        generated_items.append(f"EV Pu = {section_load_additions['backfill_pu_kn']:,.2f} kN")
+        generated_items.append(f"EV Mux = {section_load_additions['backfill_mux_knm']:,.2f} kN-m")
+    if approach_slab_result is not None:
+        generated_items.append(f"approach Pu = {section_load_additions['approach_pu_kn']:,.2f} kN")
+        generated_items.append(f"approach Mux = {section_load_additions['approach_mux_knm']:,.2f} kN-m")
+    st.info(
+        "Section PMM includes app-generated vertical loads over the selected strip "
+        f"({section_load_additions['vertical_width_ratio']:.1%} of full width): "
+        + "; ".join(generated_items)
+        + "."
+    )
+else:
+    st.warning("Section PMM excludes app-generated vertical loads. Only bearing loads plus lateral earth pressure, if any, are used.")
 
 if resultant.pu_kn < 0:
-    st.warning("Pu_z resultant is net tension. The app can show resultants, but reinforcement design assumptions should be checked carefully.")
+    st.warning("Pu_z resultant is net tension/uplift. A separate phi Tn reinforcement check is now included in the section status.")
 
 check = None
 design_error = None
@@ -5400,11 +5531,17 @@ with tabs[1]:
     with st.expander("Section design demand breakdown", expanded=earth_pressure_result is not None):
         demand_rows = [
             ["Bearing strip Pu", bearing_resultant.pu_kn, "kN"],
+            ["Self-weight Pu added to strip", section_load_additions["dead_pu_kn"], "kN"],
+            ["Backfill EV Pu added to strip", section_load_additions["backfill_pu_kn"], "kN"],
+            ["Approach slab Pu added to strip", section_load_additions["approach_pu_kn"], "kN"],
+            ["Section design Pu", resultant.pu_kn, "kN"],
             ["Bearing strip Vy", bearing_resultant.vy_kn, "kN"],
             ["Earth pressure Vy added to strip", earth_design_vy_kn, "kN"],
             ["Section design Vy", resultant.vy_kn, "kN"],
             ["Bearing strip Mux", bearing_resultant.mux_knm, "kN-m"],
             ["Earth pressure Mux added to strip", earth_design_mux_knm, "kN-m"],
+            ["Backfill EV Mux added to strip", section_load_additions["backfill_mux_knm"], "kN-m"],
+            ["Approach slab Mux added to strip", section_load_additions["approach_mux_knm"], "kN-m"],
             ["Section design Mux", resultant.mux_knm, "kN-m"],
             ["Section design Muy", resultant.muy_knm, "kN-m"],
         ]
@@ -5414,6 +5551,11 @@ with tabs[1]:
                 "Earth pressure is scaled by the selected strength-section width before being added to Mux. "
                 f"Scale = {earth_design_width_ratio:.1%} of the full abutment width."
             )
+        st.caption(
+            "Generated vertical loads are scaled by selected strength-section width / full wall width. "
+            f"Scale = {section_load_additions['vertical_width_ratio']:.1%}. "
+            "For Wall Pier mode, backfill EV, approach slab reaction, and earth pressure are forced to zero."
+        )
     with st.expander("Global all-bearing resultants", expanded=False):
         global_table = pd.DataFrame(
             [
@@ -5434,7 +5576,8 @@ with tabs[1]:
         st.progress(min(1.0, max(0.0, check.governing_ratio)))
         summary = pd.DataFrame(
             [row for row in [
-                ["Axial Pu / phi Pmax", check.axial_ratio],
+                ["Compression Pu / phi Pmax", check.axial_ratio],
+                ["Uplift |Pu| / phi Tn", check.tension_ratio],
                 ["Mux / phi Mnx(Pu)", check.mux_ratio],
                 ["Muy / phi Mny(Pu)", check.muy_ratio],
                 ["Linear biaxial interaction", check.biaxial_linear_ratio],
