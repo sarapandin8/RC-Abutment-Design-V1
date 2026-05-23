@@ -1116,6 +1116,8 @@ def pilecap_base_force_summary_table(
         earth_pressure=earth_pressure,
     )
     total_pu_kn = totals["total_pu_uls_kn"]
+    total_pux_kn = totals["total_pux_uls_kn"]
+    total_puy_kn = totals["total_puy_uls_kn"]
     rows = [
         {
             "Resultant for pile cap": "Pu_z from bearings",
@@ -1205,42 +1207,60 @@ def pilecap_base_force_summary_table(
             "Basis": " + ".join(pu_basis),
         }
     )
+    rows.extend(
+        [
+            {
+                "Resultant for pile cap": "Pu_x from bearings",
+                "Point at centroid": f"{resultant.vx_kn:,.2f} kN",
+                "Linearized over x width": f"{resultant.vx_kn / width_m:,.2f} kN/m",
+                "Basis": "sum(Pu_x from bearing table)",
+            },
+            {
+                "Resultant for pile cap": "Total Pu_x for pile cap ULS",
+                "Point at centroid": f"{total_pux_kn:,.2f} kN",
+                "Linearized over x width": f"{total_pux_kn / width_m:,.2f} kN/m",
+                "Basis": "bearing Pu_x only in current pile-cap summary assumptions",
+            },
+            {
+                "Resultant for pile cap": "Pu_y from bearings",
+                "Point at centroid": f"{resultant.vy_kn:,.2f} kN",
+                "Linearized over x width": f"{resultant.vy_kn / width_m:,.2f} kN/m",
+                "Basis": "sum(Pu_y from bearing table)",
+            },
+        ]
+    )
     if earth_pressure is not None:
-        total_vy_kn = totals["total_vy_uls_kn"]
         rows.extend(
             [
                 {
-                    "Resultant for pile cap": "Vy from bearings",
-                    "Point at centroid": f"{resultant.vy_kn:,.2f} kN",
-                    "Linearized over x width": f"{resultant.vy_kn / width_m:,.2f} kN/m",
-                    "Basis": "sum(Pu_y from bearing table)",
-                },
-                {
-                    "Resultant for pile cap": "Vy from EH soil pressure",
+                    "Resultant for pile cap": "Pu_y from EH soil pressure",
                     "Point at centroid": f"{earth_pressure.uls_soil_vy_kn:,.2f} kN",
                     "Linearized over x width": f"{earth_pressure.uls_soil_vy_kn / width_m:,.2f} kN/m",
                     "Basis": f"{earth_pressure.eh_factor:.2f} x 0.5 x K x gamma_soil x H^2 x Lx",
                 },
                 {
-                    "Resultant for pile cap": "Vy from q_other surcharge",
+                    "Resultant for pile cap": "Pu_y from q_other surcharge",
                     "Point at centroid": f"{earth_pressure.uls_other_vy_kn:,.2f} kN",
                     "Linearized over x width": f"{earth_pressure.uls_other_vy_kn / width_m:,.2f} kN/m",
                     "Basis": f"{earth_pressure.q_other_factor:.2f} x K x q_other x H x Lx",
                 },
                 {
-                    "Resultant for pile cap": "Vy from traffic LS surcharge",
+                    "Resultant for pile cap": "Pu_y from traffic LS surcharge",
                     "Point at centroid": f"{earth_pressure.uls_live_vy_kn:,.2f} kN",
                     "Linearized over x width": f"{earth_pressure.uls_live_vy_kn / width_m:,.2f} kN/m",
                     "Basis": f"{earth_pressure.live_factor:.2f} x K x q_LS x H x Lx",
                 },
-                {
-                    "Resultant for pile cap": "Total Vy for pile cap ULS",
-                    "Point at centroid": f"{total_vy_kn:,.2f} kN",
-                    "Linearized over x width": f"{total_vy_kn / width_m:,.2f} kN/m",
-                    "Basis": "bearing Vy + factored EH/q_other/LS",
-                },
             ]
         )
+    puy_basis = "bearing Pu_y + factored EH/q_other/LS" if earth_pressure is not None else "bearing Pu_y only in current pile-cap summary assumptions"
+    rows.append(
+        {
+            "Resultant for pile cap": "Total Pu_y for pile cap ULS",
+            "Point at centroid": f"{total_puy_kn:,.2f} kN",
+            "Linearized over x width": f"{total_puy_kn / width_m:,.2f} kN/m",
+            "Basis": puy_basis,
+        }
+    )
     rows.extend(
         [
             {
@@ -1333,9 +1353,12 @@ def pilecap_resultant_totals(
         mux_basis.append("backfill EV eccentricity")
     if approach_slab is not None:
         mux_basis.append("approach slab eccentricity")
+    total_puy_kn = resultant.vy_kn + earth_vy_kn
     return {
         "total_pu_uls_kn": resultant.pu_kn + dead_load_pu_kn + backfill_pu_kn + approach_slab_pu_kn,
-        "total_vy_uls_kn": resultant.vy_kn + earth_vy_kn,
+        "total_pux_uls_kn": resultant.vx_kn,
+        "total_puy_uls_kn": total_puy_kn,
+        "total_vy_uls_kn": total_puy_kn,  # backward-compatible alias for existing calculations/labels
         "total_mux_uls_knm": resultant.mux_knm + earth_mux_knm + backfill_mux_knm + approach_slab_mux_knm,
         "total_muy_uls_knm": resultant.muy_knm,
         "mux_basis": mux_basis,
@@ -1364,6 +1387,8 @@ def pilecap_uls_sls_summary_table(
             {
                 "Load level": "ULS",
                 "Total Pu_z for pile cap": f"{totals['total_pu_uls_kn']:,.2f} kN",
+                "Total Pu_x for pile cap": f"{totals['total_pux_uls_kn']:,.2f} kN",
+                "Total Pu_y for pile cap": f"{totals['total_puy_uls_kn']:,.2f} kN",
                 "Total Mu_x for pile cap": f"{totals['total_mux_uls_knm']:,.2f} kN-m",
                 "Total Mu_y for pile cap": f"{totals['total_muy_uls_knm']:,.2f} kN-m",
                 "Basis": "Calculated ULS resultant",
@@ -1371,6 +1396,8 @@ def pilecap_uls_sls_summary_table(
             {
                 "Load level": f"Approx. SLS = ULS / {factor:.2f}",
                 "Total Pu_z for pile cap": f"{float(totals['total_pu_uls_kn']) / factor:,.2f} kN",
+                "Total Pu_x for pile cap": f"{float(totals['total_pux_uls_kn']) / factor:,.2f} kN",
+                "Total Pu_y for pile cap": f"{float(totals['total_puy_uls_kn']) / factor:,.2f} kN",
                 "Total Mu_x for pile cap": f"{float(totals['total_mux_uls_knm']) / factor:,.2f} kN-m",
                 "Total Mu_y for pile cap": f"{float(totals['total_muy_uls_knm']) / factor:,.2f} kN-m",
                 "Basis": "Approximate only for preliminary pile-load estimation",
@@ -5660,7 +5687,7 @@ else:
         design_error = str(exc)
 
 
-tabs = st.tabs(["Views", "Results", "Section", "Shear", "Method"])
+tabs = st.tabs(["Views", "Summary", "Flexure", "Shear", "Lateral Transfer", "Base Forces", "Method"])
 
 with tabs[0]:
     view_cols = st.columns(2)
@@ -5710,25 +5737,25 @@ with tabs[0]:
 with tabs[1]:
     metric_row(resultant, check, strength_design_width_x_mm)
     st.markdown(
-        '<p class="small-note">Section design uses the displayed Pu, Mux, and Muy. Vx and Vy are checked separately in the Shear tab as preliminary sectional shear.</p>',
+        '<p class="small-note">Flexure/PMM design uses the displayed Pu, Mux, and Muy. Vx and Vy are checked separately in the Shear tab as preliminary sectional shear.</p>',
         unsafe_allow_html=True,
     )
-    with st.expander("Section design demand breakdown", expanded=earth_pressure_result is not None):
+    with st.expander("Flexure/PMM design demand breakdown", expanded=earth_pressure_result is not None):
         demand_rows = [
             ["Bearing strip Pu", bearing_resultant.pu_kn, "kN"],
             ["Self-weight Pu added to strip", section_load_additions["dead_pu_kn"], "kN"],
             ["Backfill EV Pu added to strip", section_load_additions["backfill_pu_kn"], "kN"],
             ["Approach slab Pu added to strip", section_load_additions["approach_pu_kn"], "kN"],
-            ["Section design Pu", resultant.pu_kn, "kN"],
+            ["Flexure design Pu", resultant.pu_kn, "kN"],
             ["Bearing strip Vy", bearing_resultant.vy_kn, "kN"],
             ["Earth pressure Vy added to strip", earth_design_vy_kn, "kN"],
-            ["Section design Vy", resultant.vy_kn, "kN"],
+            ["Flexure design Vy", resultant.vy_kn, "kN"],
             ["Bearing strip Mux", bearing_resultant.mux_knm, "kN-m"],
             ["Earth pressure Mux added to strip", earth_design_mux_knm, "kN-m"],
             ["Backfill EV Mux added to strip", section_load_additions["backfill_mux_knm"], "kN-m"],
             ["Approach slab Mux added to strip", section_load_additions["approach_mux_knm"], "kN-m"],
-            ["Section design Mux", resultant.mux_knm, "kN-m"],
-            ["Section design Muy", resultant.muy_knm, "kN-m"],
+            ["Flexure design Mux", resultant.mux_knm, "kN-m"],
+            ["Flexure design Muy", resultant.muy_knm, "kN-m"],
         ]
         st.dataframe(pd.DataFrame(demand_rows, columns=["Demand item", "Value", "Unit"]), width="stretch", hide_index=True)
         if earth_pressure_result is not None:
@@ -5821,145 +5848,10 @@ with tabs[1]:
                 f"advisory limit {check.max_spacing_advisory_mm:.0f} mm."
             )
 
-    st.subheader("Pile Cap Base Force Summary")
-    st.dataframe(
-        pilecap_uls_sls_summary_table(
-            global_resultant,
-            dead_load=dead_load_summary,
-            backfill_vertical=backfill_vertical_result,
-            approach_slab=approach_slab_result,
-            earth_pressure=earth_pressure_result,
-            approx_factor=1.35,
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption(
-        "Approx. SLS uses ULS / 1.35 only as a rough preliminary conversion for pile-load sizing. "
-        "It is convenient when the bearing table is entered as ULS, but it is not a substitute for a true service-load combination."
-    )
-    pilecap_load_notes = []
-    if earth_pressure_result is not None:
-        pilecap_load_notes.append("selected lateral earth pressure")
-    if backfill_vertical_result is not None:
-        pilecap_load_notes.append("vertical backfill EV")
-    if approach_slab_result is not None:
-        pilecap_load_notes.append("approach slab reaction")
-    earth_caption = f"and {' plus '.join(pilecap_load_notes)}" if pilecap_load_notes else "with earth/backfill loads excluded"
-    st.caption(
-        f"Uses all bearing loads transferred to the abutment/pier base centroid, abutment/pier self-weight, "
-        f"{earth_caption}. "
-        f"Coordinate origin is the centroid used by the bearing table; x width = {width_x_mm / 1000.0:,.3f} m. "
-        "Compression Pu_z is positive, and moment signs follow the displayed axes."
-    )
-    dl_cols = st.columns(4)
-    dl_cols[0].metric("DL volume", f"{dead_load_summary.volume_m3:,.3f} m3")
-    dl_cols[1].metric("Service DL", f"{dead_load_summary.service_dl_kn:,.2f} kN")
-    dl_cols[2].metric("DL factor", f"{dead_load_summary.factor:.2f}")
-    dl_cols[3].metric("Pu_z from 1.40D", f"{dead_load_summary.uls_pu_z_kn:,.2f} kN")
-    if backfill_vertical_result is not None:
-        ev_cols = st.columns(4)
-        ev_cols[0].metric("EV volume", f"{backfill_vertical_result.volume_m3:,.3f} m3")
-        ev_cols[1].metric("Service EV", f"{backfill_vertical_result.service_ev_kn:,.2f} kN")
-        ev_cols[2].metric("EV factor", f"{backfill_vertical_result.factor:.2f}")
-        ev_cols[3].metric("Pu_z from EV", f"{backfill_vertical_result.uls_pu_z_kn:,.2f} kN")
-    if approach_slab_result is not None:
-        as_cols = st.columns(4)
-        as_cols[0].metric("AS l_gap", f"{approach_slab_result.gap_m:,.2f} m")
-        as_cols[1].metric("AS service DC+DW", f"{approach_slab_result.service_dc_kn + approach_slab_result.service_dw_kn:,.2f} kN")
-        as_cols[2].metric("AS service LL", f"{approach_slab_result.service_ll_kn:,.2f} kN")
-        as_cols[3].metric("Pu_z from AS", f"{approach_slab_result.uls_pu_z_kn:,.2f} kN")
-    if earth_pressure_result is not None:
-        ep_cols = st.columns(4)
-        ep_cols[0].metric("Earth K", f"{earth_pressure_result.pressure_coefficient:.3f}", delta=earth_pressure_result.combination, delta_color="off")
-        ep_cols[1].metric("EH service", f"{earth_pressure_result.service_soil_kn_per_m:,.2f} kN/m")
-        ep_cols[2].metric(
-            "LS surcharge",
-            f"{earth_pressure_result.service_live_kn_per_m:,.2f} kN/m",
-            delta=f"h_eq {earth_pressure_result.live_h_eq_m:.2f} m",
-            delta_color="off",
-        )
-        ep_cols[3].metric("ULS Vy earth", f"{earth_pressure_result.uls_vy_kn:,.2f} kN")
-        with st.expander("Earth pressure ULS factor candidates", expanded=earth_pressure_result.load_code.startswith("EN")):
-            st.dataframe(earth_pressure_factor_table(earth_pressure_summaries), width="stretch", hide_index=True)
-            st.caption("For EN auto governing, the app uses the row with the largest absolute earth-pressure Mu_x.")
-    elif structure_type == "Wall Pier / Pier wall without backfill":
-        st.info("Wall Pier mode: earth pressure is excluded from the pile cap summary and from abutment stem design.")
-    st.dataframe(
-        pilecap_base_force_summary_table(
-            global_resultant,
-            width_x_mm,
-            dead_load_summary,
-            backfill_vertical_result,
-            approach_slab_result,
-            earth_pressure_result,
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    if stem_design_result is not None:
-        st.subheader("Abutment Stem Design - 1 m Strip")
-        stem_table = pd.DataFrame(
-            [
-                ["Governing earth pressure combination", f"{earth_pressure_result.load_code} - {earth_pressure_result.combination}", "", ""],
-                ["Mu demand at stem base", f"{stem_design_result.mu_kNm_per_m:,.2f}", "kN-m/m", ""],
-                ["Vu demand at stem base", f"{stem_design_result.vu_kN_per_m:,.2f}", "kN/m", ""],
-                ["Effective depth d", f"{stem_design_result.effective_depth_mm:,.0f}", "mm", ""],
-                ["As required by flexure", f"{stem_design_result.as_flexure_mm2_per_m:,.0f}", "mm2/m", ""],
-                ["As minimum guide", f"{stem_design_result.as_min_mm2_per_m:,.0f}", "mm2/m", stem_min_basis],
-                ["As governing", f"{stem_design_result.as_required_mm2_per_m:,.0f}", "mm2/m", stem_design_result.status],
-                [
-                    f"Spacing guide for {rebar_label(stem_design_result.bar_dia_mm)}",
-                    f"{stem_design_result.bar_spacing_mm:,.0f}" if math.isfinite(stem_design_result.bar_spacing_mm) else "N/A",
-                    "mm",
-                    "provide <= this spacing",
-                ],
-            ],
-            columns=["Item", "Value", "Unit", "Status"],
-        )
-        st.dataframe(stem_table, width="stretch", hide_index=True)
-        st.caption(
-            "This is a preliminary vertical-flexure guide for a 1 m abutment stem strip under earth pressure only. "
-            "It is separate from the bearing PMM strip check and should be verified with the final code/owner detailing rules."
-        )
-    pilecap_note = (
-        "Self-weight is calculated as a rectangular abutment/pier block from the current Geometry inputs "
-        "(Lx x t x H x concrete unit weight). It is applied at the centroid, so it adds Pu_z only and no moment. "
-    )
-    if earth_pressure_result is not None:
-        pilecap_note += (
-            "Earth pressure is applied along the selected y direction; triangular soil pressure acts at H/3 above the base, "
-            "while q_other and traffic live load surcharge act at H/2. "
-        )
-    else:
-        pilecap_note += "Earth pressure is excluded for the selected structure mode/settings. "
-    if backfill_vertical_result is not None:
-        pilecap_note += (
-            "Backfill EV is calculated from gamma_soil x Lx x b_EV x h_EV and placed at the centroid of the supported "
-            "backfill width on the heel/backfill side, so it adds Pu_z and an eccentric Mu_x to the pile-cap summary. "
-        )
-    else:
-        pilecap_note += "Vertical backfill EV is excluded for the selected settings. "
-    if approach_slab_result is not None:
-        pilecap_note += (
-            "Approach slab reaction uses the selected soil-supported l_gap, so only loads over the assumed gap bridge "
-            "to the abutment; soil-supported slab length is not added as abutment reaction. "
-        )
-        if approach_slab_ll_replaces_surcharge:
-            pilecap_note += "Traffic q_LS surcharge is suppressed to avoid double counting the approach slab live load. "
-    else:
-        pilecap_note += "Approach slab reaction is excluded for the selected settings. "
-    pilecap_note += (
-        "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
-        "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
-        "Mu_y is kept as a point couple at the centroid because smearing it uniformly along x would hide the "
-        "longitudinal eccentricity that creates bending about y."
-    )
-    st.info(pilecap_note)
 
 with tabs[2]:
     if check is None:
-        st.info("Section check will appear after a valid reinforcement layout is available.")
+        st.info("Flexure/PMM check will appear after a valid reinforcement layout is available.")
     else:
         sec_cols = st.columns(2)
         with sec_cols[0]:
@@ -6247,6 +6139,407 @@ with tabs[3]:
 
 
 with tabs[4]:
+    st.subheader("Lateral Transfer / Stability")
+    st.caption(
+        "This tab checks how total horizontal pile-cap forces are transferred. "
+        "It is separate from the Sectional Shear tab because these checks use Total Pu_x/Pu_y for pile-cap load transfer, "
+        "not only local one-way shear of the wall section."
+    )
+
+    pilecap_totals = pilecap_resultant_totals(
+        resultant,
+        dead_load=dead_load_summary,
+        backfill_vertical=backfill_vertical_result,
+        approach_slab=approach_slab_result,
+        earth_pressure=earth_pressure_result,
+    )
+    total_puz_lateral_kn = float(pilecap_totals["total_pu_uls_kn"])
+    total_pux_lateral_kn = float(pilecap_totals["total_pux_uls_kn"])
+    total_puy_lateral_kn = float(pilecap_totals["total_puy_uls_kn"])
+    total_h_lateral_kn = math.hypot(total_pux_lateral_kn, total_puy_lateral_kn)
+    total_mux_lateral_knm = float(pilecap_totals["total_mux_uls_knm"])
+    total_muy_lateral_knm = float(pilecap_totals["total_muy_uls_knm"])
+    compression_normal_kn = max(total_puz_lateral_kn, 0.0)
+    uplift_normal_kn = max(-total_puz_lateral_kn, 0.0)
+
+    st.info(
+        "For Abutment with backfill, Total Pu_y includes bearing Pu_y plus app-generated earth-pressure components. "
+        "For Wall Pier without backfill, Total Pu_y is bearing Pu_y only."
+    )
+
+    force_summary_rows = [
+        {"Item": "Total Pu_z for pile cap", "Value": f"{total_puz_lateral_kn:,.2f}", "Unit": "kN", "Use": "Normal compression/uplift for interface and sliding checks"},
+        {"Item": "Total Pu_x for pile cap", "Value": f"{total_pux_lateral_kn:,.2f}", "Unit": "kN", "Use": "Lateral transfer in x direction"},
+        {"Item": "Total Pu_y for pile cap", "Value": f"{total_puy_lateral_kn:,.2f}", "Unit": "kN", "Use": "Lateral transfer in y direction; includes earth pressure for abutments"},
+        {"Item": "Resultant horizontal force H", "Value": f"{total_h_lateral_kn:,.2f}", "Unit": "kN", "Use": "Combined lateral demand = sqrt(Pu_x² + Pu_y²)"},
+        {"Item": "Total Mu_x for pile cap", "Value": f"{total_mux_lateral_knm:,.2f}", "Unit": "kN-m", "Use": "Pile axial reaction distribution / eccentricity"},
+        {"Item": "Total Mu_y for pile cap", "Value": f"{total_muy_lateral_knm:,.2f}", "Unit": "kN-m", "Use": "Pile axial reaction distribution / eccentricity"},
+    ]
+    st.dataframe(pd.DataFrame(force_summary_rows), width="stretch", hide_index=True)
+
+    st.markdown("#### Design assumptions")
+    lat_cols = st.columns(4)
+    with lat_cols[0]:
+        lateral_pile_count = st.number_input(
+            "Number of piles sharing lateral load",
+            min_value=1,
+            max_value=200,
+            value=max(1, int(expected_bearing_count)),
+            step=1,
+            key="lateral_pile_count",
+            help="Preliminary equal-share check only. Final design should use pile-group lateral analysis when lateral loads are significant.",
+        )
+    with lat_cols[1]:
+        interface_phi = st.number_input(
+            "Shear-friction phi",
+            min_value=0.10,
+            max_value=1.00,
+            value=0.90 if "AASHTO" in code_choice.upper() else 0.75,
+            step=0.05,
+            key="interface_phi",
+        )
+    with lat_cols[2]:
+        interface_mu = st.number_input(
+            "Interface friction factor μ",
+            min_value=0.10,
+            max_value=2.00,
+            value=1.00,
+            step=0.05,
+            key="interface_mu",
+            help="Use project/code value for intentionally roughened concrete, smooth joint, shear key, or construction joint condition.",
+        )
+    with lat_cols[3]:
+        sliding_mu = st.number_input(
+            "Base sliding μ",
+            min_value=0.05,
+            max_value=2.00,
+            value=0.50,
+            step=0.05,
+            key="sliding_mu",
+            help="Preliminary friction coefficient for sliding summary. For pile-supported caps, lateral resistance usually requires pile lateral analysis, not friction alone.",
+        )
+
+    sf_cols = st.columns(4)
+    default_avf_total = 0.0
+    if check is not None:
+        default_avf_total = max(0.50 * check.as_total_mm2, 0.0)
+    with sf_cols[0]:
+        avf_total_mm2 = st.number_input(
+            "Avf crossing interface, total (mm²)",
+            min_value=0.0,
+            max_value=500000.0,
+            value=float(round(default_avf_total / 100.0) * 100.0),
+            step=100.0,
+            key="avf_total_mm2",
+            help="Total reinforcement area crossing the horizontal stem/pier-to-pile-cap joint and available for shear friction.",
+        )
+    with sf_cols[1]:
+        avf_fy_mpa = st.number_input(
+            "Avf fy (MPa)",
+            min_value=100.0,
+            max_value=700.0,
+            value=float(rebar_fy_mpa(float(st.session_state.get("bar_dia_mm", 25.0))) if "bar_dia_mm" in st.session_state else 390.0),
+            step=10.0,
+            key="avf_fy_mpa",
+        )
+    with sf_cols[2]:
+        use_compression_for_shear_friction = st.checkbox(
+            "Use Pu_z compression in shear-friction capacity",
+            value=True,
+            key="use_compression_for_shear_friction",
+            help="If unchecked, capacity is based on Avf fy only. Compression should only be used when it is reliably clamped across the joint for the same load combination.",
+        )
+    with sf_cols[3]:
+        interface_width_m = st.number_input(
+            "Interface length for reporting (m)",
+            min_value=0.1,
+            max_value=100.0,
+            value=max(float(width_x_mm) / 1000.0, 0.1),
+            step=0.1,
+            key="interface_width_m",
+        )
+
+    normal_for_shear_friction_kn = compression_normal_kn if use_compression_for_shear_friction else 0.0
+    avf_force_kn = avf_total_mm2 * avf_fy_mpa / 1000.0
+    shear_friction_nominal_kn = interface_mu * (avf_force_kn + normal_for_shear_friction_kn)
+    shear_friction_phi_vn_kn = interface_phi * shear_friction_nominal_kn
+    shear_friction_util = total_h_lateral_kn / max(shear_friction_phi_vn_kn, 1e-9)
+    pile_lateral_x_kn = abs(total_pux_lateral_kn) / max(int(lateral_pile_count), 1)
+    pile_lateral_y_kn = abs(total_puy_lateral_kn) / max(int(lateral_pile_count), 1)
+    pile_lateral_h_kn = total_h_lateral_kn / max(int(lateral_pile_count), 1)
+    sliding_friction_resistance_kn = sliding_mu * compression_normal_kn
+
+    st.markdown("#### Capacity inputs for OK/NG checks")
+    cap_cols = st.columns(4)
+    with cap_cols[0]:
+        interface_capacity_mode = st.selectbox(
+            "Interface shear capacity source",
+            ["Use shear-friction φVn", "User-defined φR_interface"],
+            index=0,
+            key="interface_capacity_mode",
+            help="Use shear-friction capacity for the global interface check, or enter a separate capacity from shear key/dowel/collector design.",
+        )
+    with cap_cols[1]:
+        custom_interface_capacity_kn = st.number_input(
+            "User φR_interface (kN)",
+            min_value=0.0,
+            max_value=10_000_000.0,
+            value=0.0,
+            step=10.0,
+            key="custom_interface_capacity_kn",
+            help="Factored design resistance of the pile-cap/stem interface, shear key, dowels, or collector system. Used only when User-defined mode is selected.",
+            disabled=interface_capacity_mode == "Use shear-friction φVn",
+        )
+    with cap_cols[2]:
+        pile_lateral_capacity_per_pile_kn = st.number_input(
+            "φR lateral per pile (kN/pile)",
+            min_value=0.0,
+            max_value=1_000_000.0,
+            value=0.0,
+            step=10.0,
+            key="pile_lateral_capacity_per_pile_kn",
+            help="Factored lateral resistance per pile from geotechnical pile lateral analysis. Leave 0.0 if not yet available; the check will be NG/input required.",
+        )
+    with cap_cols[3]:
+        additional_lateral_resistance_kn = st.number_input(
+            "Additional lateral resistance φR_add (kN)",
+            min_value=0.0,
+            max_value=10_000_000.0,
+            value=0.0,
+            step=10.0,
+            key="additional_lateral_resistance_kn",
+            help="Optional factored resistance from pile group lateral capacity, passive resistance, shear key, anchors, or other verified mechanism for the sliding/lateral stability summary.",
+        )
+
+    interface_capacity_kn = (
+        shear_friction_phi_vn_kn
+        if interface_capacity_mode == "Use shear-friction φVn"
+        else custom_interface_capacity_kn
+    )
+    interface_util = total_h_lateral_kn / max(interface_capacity_kn, 1e-9)
+    pile_lateral_util = pile_lateral_h_kn / max(pile_lateral_capacity_per_pile_kn, 1e-9)
+    sliding_resistance_kn = sliding_friction_resistance_kn + additional_lateral_resistance_kn
+    sliding_util = total_h_lateral_kn / max(sliding_resistance_kn, 1e-9)
+
+    check_rows = [
+        {
+            "Check": "1. Pile cap / abutment interface shear demand",
+            "Demand": f"H = {total_h_lateral_kn:,.2f} kN",
+            "Capacity / reference": f"φR_interface = {interface_capacity_kn:,.2f} kN",
+            "Utilization": f"{interface_util:.3f}" if interface_capacity_kn > 1e-9 else "N/A",
+            "Status": "OK" if interface_capacity_kn > 1e-9 and interface_util <= 1.0 else "NG",
+            "Basis": "H = sqrt(Total Pu_x² + Total Pu_y²); capacity from shear-friction φVn or user-defined interface/shear-key/dowel design",
+        },
+        {
+            "Check": "2. Shear friction at stem-to-pile-cap joint",
+            "Demand": f"Vu = {total_h_lateral_kn:,.2f} kN",
+            "Capacity / reference": f"φVn = {shear_friction_phi_vn_kn:,.2f} kN",
+            "Utilization": f"{shear_friction_util:.3f}" if shear_friction_phi_vn_kn > 1e-9 else "N/A",
+            "Status": "OK" if shear_friction_phi_vn_kn > 1e-9 and shear_friction_util <= 1.0 else "NG",
+            "Basis": f"φ μ (Avf fy + Pc) with μ={interface_mu:.2f}, φ={interface_phi:.2f}, Pc={normal_for_shear_friction_kn:,.2f} kN",
+        },
+        {
+            "Check": "3. Lateral transfer to pile group",
+            "Demand": f"H/n = {pile_lateral_h_kn:,.2f} kN/pile",
+            "Capacity / reference": f"φR_lateral = {pile_lateral_capacity_per_pile_kn:,.2f} kN/pile; x demand = {pile_lateral_x_kn:,.2f}, y demand = {pile_lateral_y_kn:,.2f} kN/pile",
+            "Utilization": f"{pile_lateral_util:.3f}" if pile_lateral_capacity_per_pile_kn > 1e-9 else "N/A",
+            "Status": "OK" if pile_lateral_capacity_per_pile_kn > 1e-9 and pile_lateral_util <= 1.0 else "NG",
+            "Basis": "Preliminary equal-share check against user-entered geotechnical/design lateral resistance per pile",
+        },
+        {
+            "Check": "4. Sliding / lateral stability summary",
+            "Demand": f"H = {total_h_lateral_kn:,.2f} kN",
+            "Capacity / reference": f"μN + φR_add = {sliding_resistance_kn:,.2f} kN",
+            "Utilization": f"{sliding_util:.3f}" if sliding_resistance_kn > 1e-9 else "N/A",
+            "Status": "OK" if sliding_resistance_kn > 1e-9 and sliding_util <= 1.0 else "NG",
+            "Basis": f"μN = {sliding_friction_resistance_kn:,.2f} kN plus verified additional lateral resistance = {additional_lateral_resistance_kn:,.2f} kN",
+        },
+    ]
+    st.dataframe(pd.DataFrame(check_rows), width="stretch", hide_index=True)
+
+    if pile_lateral_capacity_per_pile_kn <= 1e-9:
+        st.warning("Pile lateral transfer check is NG because φR lateral per pile has not been entered. Use geotechnical pile lateral analysis or project-approved pile group resistance.")
+    if interface_capacity_mode == "User-defined φR_interface" and custom_interface_capacity_kn <= 1e-9:
+        st.warning("Interface shear check is NG because user-defined φR_interface is zero. Enter a verified interface/shear-key/dowel capacity or use shear-friction φVn.")
+    if additional_lateral_resistance_kn > 0.0:
+        st.info("Additional lateral resistance is included in sliding/lateral stability. It should be supported by separate pile group, passive resistance, shear key, or anchor calculations.")
+
+    detail_rows = [
+        ["Horizontal demand", "Total Pu_x", f"{total_pux_lateral_kn:,.2f}", "kN"],
+        ["Horizontal demand", "Total Pu_y", f"{total_puy_lateral_kn:,.2f}", "kN"],
+        ["Horizontal demand", "Resultant H", f"{total_h_lateral_kn:,.2f}", "kN"],
+        ["Normal force", "Compression used Pc", f"{normal_for_shear_friction_kn:,.2f}", "kN"],
+        ["Normal force", "Uplift warning Tu", f"{uplift_normal_kn:,.2f}", "kN"],
+        ["Shear friction", "Avf fy", f"{avf_force_kn:,.2f}", "kN"],
+        ["Shear friction", "Nominal Vn", f"{shear_friction_nominal_kn:,.2f}", "kN"],
+        ["Shear friction", "φVn", f"{shear_friction_phi_vn_kn:,.2f}", "kN"],
+        ["Pile lateral", "Number of piles", f"{int(lateral_pile_count)}", ""],
+        ["Interface", "Selected interface capacity φR", f"{interface_capacity_kn:,.2f}", "kN"],
+        ["Pile lateral", "Equal-share H per pile", f"{pile_lateral_h_kn:,.2f}", "kN/pile"],
+        ["Pile lateral", "φR lateral per pile", f"{pile_lateral_capacity_per_pile_kn:,.2f}", "kN/pile"],
+        ["Sliding", "Friction resistance μN", f"{sliding_friction_resistance_kn:,.2f}", "kN"],
+        ["Sliding", "Additional lateral resistance", f"{additional_lateral_resistance_kn:,.2f}", "kN"],
+        ["Sliding", "Total lateral resistance", f"{sliding_resistance_kn:,.2f}", "kN"],
+        ["Reporting", "Interface demand per length", f"{total_h_lateral_kn / max(interface_width_m, 1e-9):,.2f}", "kN/m"],
+    ]
+    with st.expander("Lateral transfer calculation details", expanded=False):
+        st.dataframe(pd.DataFrame(detail_rows, columns=["Group", "Item", "Value", "Unit"]), width="stretch", hide_index=True)
+
+    if structure_type == "Abutment with backfill" and earth_pressure_result is not None:
+        st.warning(
+            "Abutment check: Total Pu_y includes earth pressure and may control interface shear, lateral pile demand, and sliding. "
+            "Do not rely only on the Sectional Shear tab for abutment base transfer."
+        )
+    if uplift_normal_kn > 0:
+        st.error(
+            "Net Total Pu_z is uplift/tension. Do not use compression friction as stabilizing resistance for final design; "
+            "check anchors/starter bars, pile tension, and pile-cap overturning explicitly."
+        )
+    st.info(
+        "This tab is a preliminary design/QA check. Final pile-cap design should still check pile axial reactions from Pu_z + Mu_x + Mu_y, "
+        "one-way shear, punching, strut-and-tie action, pile lateral capacity, and construction-joint detailing."
+    )
+
+
+with tabs[5]:
+    st.subheader("Pile Cap Base Force Summary")
+    st.dataframe(
+        pilecap_uls_sls_summary_table(
+            global_resultant,
+            dead_load=dead_load_summary,
+            backfill_vertical=backfill_vertical_result,
+            approach_slab=approach_slab_result,
+            earth_pressure=earth_pressure_result,
+            approx_factor=1.35,
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    st.caption(
+        "Approx. SLS uses ULS / 1.35 only as a rough preliminary conversion for pile-load sizing. "
+        "It is convenient when the bearing table is entered as ULS, but it is not a substitute for a true service-load combination."
+    )
+    pilecap_load_notes = []
+    if earth_pressure_result is not None:
+        pilecap_load_notes.append("selected lateral earth pressure")
+    if backfill_vertical_result is not None:
+        pilecap_load_notes.append("vertical backfill EV")
+    if approach_slab_result is not None:
+        pilecap_load_notes.append("approach slab reaction")
+    earth_caption = f"and {' plus '.join(pilecap_load_notes)}" if pilecap_load_notes else "with earth/backfill loads excluded"
+    st.caption(
+        f"Uses all bearing loads transferred to the abutment/pier base centroid, abutment/pier self-weight, "
+        f"{earth_caption}. "
+        f"Coordinate origin is the centroid used by the bearing table; x width = {width_x_mm / 1000.0:,.3f} m. "
+        "Compression Pu_z is positive; Pu_x/Pu_y follow the displayed positive axes, and moment signs follow the right-hand rule."
+    )
+    dl_cols = st.columns(4)
+    dl_cols[0].metric("DL volume", f"{dead_load_summary.volume_m3:,.3f} m3")
+    dl_cols[1].metric("Service DL", f"{dead_load_summary.service_dl_kn:,.2f} kN")
+    dl_cols[2].metric("DL factor", f"{dead_load_summary.factor:.2f}")
+    dl_cols[3].metric("Pu_z from 1.40D", f"{dead_load_summary.uls_pu_z_kn:,.2f} kN")
+    if backfill_vertical_result is not None:
+        ev_cols = st.columns(4)
+        ev_cols[0].metric("EV volume", f"{backfill_vertical_result.volume_m3:,.3f} m3")
+        ev_cols[1].metric("Service EV", f"{backfill_vertical_result.service_ev_kn:,.2f} kN")
+        ev_cols[2].metric("EV factor", f"{backfill_vertical_result.factor:.2f}")
+        ev_cols[3].metric("Pu_z from EV", f"{backfill_vertical_result.uls_pu_z_kn:,.2f} kN")
+    if approach_slab_result is not None:
+        as_cols = st.columns(4)
+        as_cols[0].metric("AS l_gap", f"{approach_slab_result.gap_m:,.2f} m")
+        as_cols[1].metric("AS service DC+DW", f"{approach_slab_result.service_dc_kn + approach_slab_result.service_dw_kn:,.2f} kN")
+        as_cols[2].metric("AS service LL", f"{approach_slab_result.service_ll_kn:,.2f} kN")
+        as_cols[3].metric("Pu_z from AS", f"{approach_slab_result.uls_pu_z_kn:,.2f} kN")
+    if earth_pressure_result is not None:
+        ep_cols = st.columns(4)
+        ep_cols[0].metric("Earth K", f"{earth_pressure_result.pressure_coefficient:.3f}", delta=earth_pressure_result.combination, delta_color="off")
+        ep_cols[1].metric("EH service", f"{earth_pressure_result.service_soil_kn_per_m:,.2f} kN/m")
+        ep_cols[2].metric(
+            "LS surcharge",
+            f"{earth_pressure_result.service_live_kn_per_m:,.2f} kN/m",
+            delta=f"h_eq {earth_pressure_result.live_h_eq_m:.2f} m",
+            delta_color="off",
+        )
+        ep_cols[3].metric("ULS Vy earth", f"{earth_pressure_result.uls_vy_kn:,.2f} kN")
+        with st.expander("Earth pressure ULS factor candidates", expanded=earth_pressure_result.load_code.startswith("EN")):
+            st.dataframe(earth_pressure_factor_table(earth_pressure_summaries), width="stretch", hide_index=True)
+            st.caption("For EN auto governing, the app uses the row with the largest absolute earth-pressure Mu_x.")
+    elif structure_type == "Wall Pier / Pier wall without backfill":
+        st.info("Wall Pier mode: earth pressure is excluded from the pile cap summary and from abutment stem design.")
+    st.dataframe(
+        pilecap_base_force_summary_table(
+            global_resultant,
+            width_x_mm,
+            dead_load_summary,
+            backfill_vertical_result,
+            approach_slab_result,
+            earth_pressure_result,
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    if stem_design_result is not None:
+        st.subheader("Abutment Stem Design - 1 m Strip")
+        stem_table = pd.DataFrame(
+            [
+                ["Governing earth pressure combination", f"{earth_pressure_result.load_code} - {earth_pressure_result.combination}", "", ""],
+                ["Mu demand at stem base", f"{stem_design_result.mu_kNm_per_m:,.2f}", "kN-m/m", ""],
+                ["Vu demand at stem base", f"{stem_design_result.vu_kN_per_m:,.2f}", "kN/m", ""],
+                ["Effective depth d", f"{stem_design_result.effective_depth_mm:,.0f}", "mm", ""],
+                ["As required by flexure", f"{stem_design_result.as_flexure_mm2_per_m:,.0f}", "mm2/m", ""],
+                ["As minimum guide", f"{stem_design_result.as_min_mm2_per_m:,.0f}", "mm2/m", stem_min_basis],
+                ["As governing", f"{stem_design_result.as_required_mm2_per_m:,.0f}", "mm2/m", stem_design_result.status],
+                [
+                    f"Spacing guide for {rebar_label(stem_design_result.bar_dia_mm)}",
+                    f"{stem_design_result.bar_spacing_mm:,.0f}" if math.isfinite(stem_design_result.bar_spacing_mm) else "N/A",
+                    "mm",
+                    "provide <= this spacing",
+                ],
+            ],
+            columns=["Item", "Value", "Unit", "Status"],
+        )
+        st.dataframe(stem_table, width="stretch", hide_index=True)
+        st.caption(
+            "This is a preliminary vertical-flexure guide for a 1 m abutment stem strip under earth pressure only. "
+            "It is separate from the bearing PMM strip check and should be verified with the final code/owner detailing rules."
+        )
+    pilecap_note = (
+        "Self-weight is calculated as a rectangular abutment/pier block from the current Geometry inputs "
+        "(Lx x t x H x concrete unit weight). It is applied at the centroid, so it adds Pu_z only and no moment. "
+    )
+    if earth_pressure_result is not None:
+        pilecap_note += (
+            "Earth pressure is applied along the selected y direction; triangular soil pressure acts at H/3 above the base, "
+            "while q_other and traffic live load surcharge act at H/2. "
+        )
+    else:
+        pilecap_note += "Earth pressure is excluded for the selected structure mode/settings. "
+    if backfill_vertical_result is not None:
+        pilecap_note += (
+            "Backfill EV is calculated from gamma_soil x Lx x b_EV x h_EV and placed at the centroid of the supported "
+            "backfill width on the heel/backfill side, so it adds Pu_z and an eccentric Mu_x to the pile-cap summary. "
+        )
+    else:
+        pilecap_note += "Vertical backfill EV is excluded for the selected settings. "
+    if approach_slab_result is not None:
+        pilecap_note += (
+            "Approach slab reaction uses the selected soil-supported l_gap, so only loads over the assumed gap bridge "
+            "to the abutment; soil-supported slab length is not added as abutment reaction. "
+        )
+        if approach_slab_ll_replaces_surcharge:
+            pilecap_note += "Traffic q_LS surcharge is suppressed to avoid double counting the approach slab live load. "
+    else:
+        pilecap_note += "Approach slab reaction is excluded for the selected settings. "
+    pilecap_note += (
+        "Mu_x can be linearized as a distributed line couple along x with unit kN-m/m when the pile-cap model "
+        "accepts wall-line moment input. It is an idealized smear of the total couple, not a vertical line load. "
+        "Mu_y is kept as a point couple at the centroid because smearing it uniformly along x would hide the "
+        "longitudinal eccentricity that creates bending about y."
+    )
+    st.info(pilecap_note)
+
+
+with tabs[6]:
     st.markdown(
         """
         **Coordinate and sign convention**
@@ -6300,7 +6593,7 @@ with tabs[4]:
 
         **Pile cap base force summary**
 
-        The pile cap summary in the Results tab uses all bearings, transfers their loads to the base centroid of
+        The pile cap force summary in the Base Forces tab uses all bearings, transfers their loads to the base centroid of
         the abutment/pier, adds the abutment/pier self-weight dead load, and includes lateral earth pressure plus
         vertical backfill `EV` only in
         Abutment mode. It is intended as an interface force summary for a separate pile-cap model, not as a pile-cap
@@ -6353,7 +6646,7 @@ with tabs[4]:
 
         **Abutment stem design**
 
-        In Abutment mode, the Results tab also reports a preliminary 1 m strip stem design from earth pressure only:
+        In Abutment mode, the Base Forces tab also reports a preliminary 1 m strip stem design from earth pressure only:
 
         `Mu_stem = abs(Mu_x earth) / Lx`  
         `Vu_stem = abs(Vy earth) / Lx`
@@ -6455,7 +6748,7 @@ with tabs[4]:
         The max spacing advisory shown on the section is a detailing aid. Its default value is `min(3t, 450 mm)`,
         where `t` is the abutment thickness along y, but it must be verified against the governing ACI/AASHTO edition,
         member classification, seismic requirements, and project specifications.
-        The Results tab also reports a shrinkage/temperature-style distributed longitudinal reinforcement check.
+        The Base Forces tab also reports a shrinkage/temperature-style distributed longitudinal reinforcement check.
         The app intentionally does not apply a column longitudinal minimum such as `Ast >= 1%Ag` because the checked
         abutment/pier strip can have a very large gross area. For ACI style, the shrinkage/temperature ratio is taken
         as `rho = 0.0020` when `fy < 420 MPa`, otherwise `rho >= 0.0018*420/fy` but not less than `0.0014`.
