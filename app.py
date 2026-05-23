@@ -6423,6 +6423,21 @@ with tabs[5]:
         "Approx. SLS uses ULS / 1.35 only as a rough preliminary conversion for pile-load sizing. "
         "It is convenient when the bearing table is entered as ULS, but it is not a substitute for a true service-load combination."
     )
+    st.markdown("**How to use these pile-cap base forces**")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                ["Total Pu_z", "Use for vertical pile reaction, STM"],
+                ["Total Mu_x", "Use for pile reaction distribution, flexure/STM about x"],
+                ["Total Mu_y", "Use for pile reaction distribution, flexure/STM about y"],
+                ["Total Pu_x", "Use for lateral load, pile lateral check"],
+                ["Total Pu_y", "Use for lateral load, pile lateral check"],
+            ],
+            columns=["Base force", "Recommended use"],
+        ),
+        width="stretch",
+        hide_index=True,
+    )
     pilecap_load_notes = []
     if earth_pressure_result is not None:
         pilecap_load_notes.append("selected lateral earth pressure")
