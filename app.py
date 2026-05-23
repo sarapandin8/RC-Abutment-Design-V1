@@ -349,6 +349,11 @@ class ShearCheckSummary:
     avs_provided_mm2_per_m: float
     phi_vn_provided_kn: float
     utilization: float
+    theta_deg: float
+    beta_factor: float
+    shear_method: str
+    longitudinal_strain: float
+    theta_beta_basis: str
     status: str
     notes: str
 
@@ -390,9 +395,9 @@ def _round_down_spacing_mm(value: float, increment: float = 25.0) -> float:
 def shear_design_style_parameters(code_name: str, fc_mpa: float) -> dict[str, float | str]:
     if "AASHTO" in code_name.upper():
         return {
-            "basis": "AASHTO LRFD style simplified shear: phi_v=0.90, beta=2.0 preliminary MCFT-style Vc",
+            "basis": "AASHTO LRFD theta/beta sectional shear: Vc = 0.083 beta sqrt(fc') bv dv; Vs = Av fy dv cot(theta) / s for vertical stirrups",
             "phi_v": 0.90,
-            "vc_coeff": 0.083 * 2.0,
+            "vc_coeff": 0.083,
             "min_sqrt_coeff": 0.083,
             "min_mpa_coeff": 0.35,
             "vs_limit_kn_coeff": 0.25 * max(float(fc_mpa), 0.0),
@@ -417,6 +422,58 @@ def shear_design_style_parameters(code_name: str, fc_mpa: float) -> dict[str, fl
     }
 
 
+
+def aashto_theta_beta_from_longitudinal_strain(
+    *,
+    mu_knm: float,
+    vu_kn: float,
+    nu_kn: float,
+    dv_mm: float,
+    as_longitudinal_mm2: float,
+    es_mpa: float = 200_000.0,
+    has_minimum_transverse_reinforcement: bool = True,
+) -> dict[str, float | str]:
+    """Estimate AASHTO/CSA-style theta and beta from longitudinal strain.
+
+    Sign convention in this app: Nu/Pu compression is positive. The shear
+    strain equation uses tensile axial force as positive, so compression is
+    taken as negative in the numerator.
+
+    This helper intentionally covers RC/nonprestressed sections only. Prestress
+    terms Vp and Aps*fpo are taken as zero. For final prestressed design, use a
+    project calculation sheet or a complete AASHTO LRFD implementation.
+    """
+    dv = max(float(dv_mm), 1.0)
+    as_long = max(float(as_longitudinal_mm2), 1.0)
+    es = max(float(es_mpa), 1.0)
+    mu_force_n = abs(float(mu_knm)) * 1_000_000.0 / dv
+    vu_force_n = abs(float(vu_kn)) * 1_000.0
+    nu_tension_n = -float(nu_kn) * 1_000.0  # app compression-positive -> equation tension-positive
+    numerator_n = mu_force_n + 0.5 * nu_tension_n + vu_force_n
+    eps_s_raw = numerator_n / max(es * as_long, 1e-9)
+    eps_s = min(0.0030, max(0.0, eps_s_raw))
+    theta_deg = min(45.0, max(22.0, 29.0 + 3500.0 * eps_s))
+
+    # For members with at least minimum transverse reinforcement, the crack
+    # spacing term in the published simplified relationship is taken as unity.
+    beta = 4.8 / (1.0 + 750.0 * eps_s)
+    if not has_minimum_transverse_reinforcement:
+        beta *= 0.75
+    beta = min(6.0, max(0.1, beta))
+    basis = (
+        "Code-derived simplified RC estimate: eps_s = "
+        "(Mu/dv + 0.5Nu_tension + Vu)/(Es As); "
+        "theta = 29 + 3500 eps_s; beta = 4.8/(1 + 750 eps_s). "
+        "Prestress terms are not included."
+    )
+    return {
+        "theta_deg": theta_deg,
+        "beta": beta,
+        "eps_s": eps_s,
+        "eps_s_raw": eps_s_raw,
+        "basis": basis,
+    }
+
 def shear_check_summary(
     *,
     name: str,
@@ -430,6 +487,12 @@ def shear_check_summary(
     tie_dia_mm: float,
     tie_legs: int,
     spacing_provided_mm: float,
+    aashto_theta_deg: float = 45.0,
+    aashto_beta: float = 1.5,
+    aashto_theta_beta_mode: str = "Conservative manual",
+    mu_knm_for_theta_beta: float = 0.0,
+    nu_kn_for_theta_beta: float = 0.0,
+    as_longitudinal_mm2_for_theta_beta: float = 0.0,
 ) -> ShearCheckSummary:
     vu = abs(float(vu_kn))
     bw = max(float(bw_mm), 1.0)
@@ -439,10 +502,49 @@ def shear_check_summary(
     params = shear_design_style_parameters(code_name, fc)
     phi_v = float(params["phi_v"])
     sqrt_fc = math.sqrt(fc)
-    vc = float(params["vc_coeff"]) * sqrt_fc * bw * d / 1000.0
+    is_aashto = "AASHTO" in code_name.upper()
+    theta_deg = 45.0
+    beta_factor = 1.5
+    longitudinal_strain = 0.0
+    theta_beta_basis = "Manual theta/beta input"
+    shear_method = "ACI simplified"
+    cot_theta = 1.0
+    if is_aashto:
+        mode = str(aashto_theta_beta_mode)
+        if mode.startswith("Code-derived"):
+            derived = aashto_theta_beta_from_longitudinal_strain(
+                mu_knm=float(mu_knm_for_theta_beta),
+                vu_kn=vu,
+                nu_kn=float(nu_kn_for_theta_beta),
+                dv_mm=d,
+                as_longitudinal_mm2=max(float(as_longitudinal_mm2_for_theta_beta), 1.0),
+            )
+            theta_deg = float(derived["theta_deg"])
+            beta_factor = float(derived["beta"])
+            longitudinal_strain = float(derived["eps_s"])
+            theta_beta_basis = str(derived["basis"])
+            shear_method = f"AASHTO code-derived simplified theta/beta (theta={theta_deg:.1f} deg, beta={beta_factor:.2f})"
+        else:
+            theta_deg = min(45.0, max(22.0, float(aashto_theta_deg)))
+            beta_factor = min(6.0, max(0.1, float(aashto_beta)))
+            longitudinal_strain = 0.0
+            theta_beta_basis = "Manual/project-assumed theta and beta"
+            shear_method = f"AASHTO manual theta/beta (theta={theta_deg:.1f} deg, beta={beta_factor:.2f})"
+        theta_rad = math.radians(theta_deg)
+        cot_theta = 1.0 / max(math.tan(theta_rad), 1e-9)
+        vc = float(params["vc_coeff"]) * beta_factor * sqrt_fc * bw * d / 1000.0
+    else:
+        vc = float(params["vc_coeff"]) * sqrt_fc * bw * d / 1000.0
+        beta_factor = 0.0
+        theta_deg = 0.0
+        longitudinal_strain = 0.0
+        theta_beta_basis = "Not applicable for ACI simplified shear"
     phi_vc = phi_v * vc
     vs_required = max(vu / max(phi_v, 1e-9) - vc, 0.0)
-    avs_strength = vs_required * 1_000_000.0 / max(fyt * d, 1e-9)
+    if is_aashto:
+        avs_strength = vs_required * 1_000_000.0 / max(fyt * d * cot_theta, 1e-9)
+    else:
+        avs_strength = vs_required * 1_000_000.0 / max(fyt * d, 1e-9)
     min_required = vu > 0.5 * phi_vc
     avs_min = 0.0
     if min_required:
@@ -460,12 +562,15 @@ def shear_check_summary(
     spacing_recommended = _round_down_spacing_mm(spacing_recommended)
     spacing_provided = max(float(spacing_provided_mm), 1.0)
     avs_provided = tie_area * 1000.0 / spacing_provided
-    vs_provided = (avs_provided / 1000.0) * fyt * d / 1000.0
+    if is_aashto:
+        vs_provided = (avs_provided / 1000.0) * fyt * d * cot_theta / 1000.0
+    else:
+        vs_provided = (avs_provided / 1000.0) * fyt * d / 1000.0
     phi_vn = phi_v * (vc + vs_provided)
     utilization = vu / max(phi_vn, 1e-9)
 
     nominal_limit = float(params["vs_limit_kn_coeff"]) * bw * d / 1000.0
-    section_limit_ok = vs_required <= nominal_limit if "AASHTO" not in code_name.upper() else (vc + vs_required) <= nominal_limit
+    section_limit_ok = vs_required <= nominal_limit if not is_aashto else (vc + vs_required) <= nominal_limit
     spacing_ok = spacing_provided <= spacing_code_max + 1e-9
     strength_ok = vu <= phi_vn + 1e-9
     min_ok = (not min_required) or avs_provided >= avs_min - 1e-9
@@ -479,8 +584,11 @@ def shear_check_summary(
         notes.append("section shear limit exceeded; increase section size/strength")
     if not spacing_ok:
         notes.append("provided spacing exceeds code-style maximum")
-    if "AASHTO" in code_name.upper():
-        notes.append("AASHTO full shear design should verify theta/beta by current LRFD provisions")
+    if is_aashto:
+        if str(aashto_theta_beta_mode).startswith("Code-derived"):
+            notes.append(f"AASHTO code-derived simplified estimate used: eps_s={longitudinal_strain:.6f}, theta={theta_deg:.1f} deg, beta={beta_factor:.2f}; verify against project LRFD procedure")
+        else:
+            notes.append(f"AASHTO manual theta/beta used: theta={theta_deg:.1f} deg, beta={beta_factor:.2f}; verify theta/beta selection from project LRFD procedure")
     return ShearCheckSummary(
         name=name,
         axis=axis,
@@ -505,6 +613,11 @@ def shear_check_summary(
         avs_provided_mm2_per_m=avs_provided,
         phi_vn_provided_kn=phi_vn,
         utilization=utilization,
+        theta_deg=theta_deg,
+        beta_factor=beta_factor,
+        shear_method=shear_method,
+        longitudinal_strain=longitudinal_strain,
+        theta_beta_basis=theta_beta_basis,
         status=status,
         notes="; ".join(notes),
     )
@@ -1442,6 +1555,28 @@ def localize_bearing_records(records: list[dict], strip_center_x: float) -> list
         local["x_mm"] = float(row.get("x_mm", 0.0)) - strip_center_x
         localized.append(local)
     return localized
+
+
+def converted_bearing_table(
+    df: pd.DataFrame,
+    *,
+    px_factor: float,
+    py_factor: float,
+    pz_factor: float,
+    mx_factor: float,
+    my_factor: float,
+) -> pd.DataFrame:
+    converted = clean_bearings(df).copy()
+    factors = {
+        "Pu_x_kN": float(px_factor),
+        "Pu_y_kN": float(py_factor),
+        "Pu_z_kN": float(pz_factor),
+        "Mu_x_kNm": float(mx_factor),
+        "Mu_y_kNm": float(my_factor),
+    }
+    for column, factor in factors.items():
+        converted[column] = pd.to_numeric(converted[column], errors="coerce").fillna(0.0) * factor
+    return converted
 
 
 def make_perimeter_bars(
@@ -5165,6 +5300,56 @@ bearing_update_message = st.session_state.pop("bearing_update_message", None)
 if bearing_update_message:
     st.success(bearing_update_message)
 
+st.warning(
+    "Sign convention: enter Pu_z as positive downward compression on the abutment/pier. "
+    "For many analysis programs, support reaction Fz may be reported positive upward; convert before design."
+)
+with st.expander("Sign convention helper for CSiBridge / SAP2000 / ETABS", expanded=False):
+    st.markdown(
+        """
+        Use this helper only when the values in the table still follow the analysis-program output convention.
+        The app design convention is:
+
+        `Pu_z > 0` = downward compression on substructure, `Pu_z < 0` = uplift/tension.
+
+        Typical warning: if your exported support reaction is positive upward, a compressive bearing reaction may need `Pu_z factor = -1`.
+        Forces and moments from each model must still be checked against the model axes and local/global output settings.
+        """
+    )
+    sign_cols = st.columns(5)
+    with sign_cols[0]:
+        px_factor = st.selectbox("Pu_x factor", [-1.0, 1.0], index=1, key="sign_px_factor")
+    with sign_cols[1]:
+        py_factor = st.selectbox("Pu_y factor", [-1.0, 1.0], index=1, key="sign_py_factor")
+    with sign_cols[2]:
+        pz_factor = st.selectbox("Pu_z factor", [-1.0, 1.0], index=0, key="sign_pz_factor", help="Use -1 when exported Fz positive upward but app requires compression positive downward.")
+    with sign_cols[3]:
+        mx_factor = st.selectbox("Mu_x factor", [-1.0, 1.0], index=1, key="sign_mx_factor")
+    with sign_cols[4]:
+        my_factor = st.selectbox("Mu_y factor", [-1.0, 1.0], index=1, key="sign_my_factor")
+    converted_preview = converted_bearing_table(
+        st.session_state.pending_bearing_table,
+        px_factor=float(px_factor),
+        py_factor=float(py_factor),
+        pz_factor=float(pz_factor),
+        mx_factor=float(mx_factor),
+        my_factor=float(my_factor),
+    )
+    st.dataframe(converted_preview, width="stretch", hide_index=True)
+    apply_sign_conversion = st.button(
+        "Apply sign conversion to bearing table",
+        key="apply_bearing_sign_conversion",
+        type="secondary",
+        width="stretch",
+    )
+    if apply_sign_conversion:
+        st.session_state.bearing_table = converted_preview.copy()
+        st.session_state.pending_bearing_table = converted_preview.copy()
+        st.session_state.bearing_table_dirty = False
+        st.session_state.pop("bearing_load_editor", None)
+        st.session_state.bearing_update_message = "Bearing table sign convention converted. Please review the table before using the results."
+        st.rerun()
+
 with st.form("bearing_load_form"):
     edited_bearing_table = st.data_editor(
         st.session_state.pending_bearing_table,
@@ -5807,9 +5992,112 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("Shear Check")
     st.caption(
-        "Preliminary sectional shear check using the same code assumption selected in Design Basis. "
-        "Pile-cap one-way/punching shear and detailed AASHTO theta/beta MCFT design remain separate final-design checks."
+        "Sectional shear check using the same code assumption selected in Design Basis. "
+        "For AASHTO, the app now uses explicit theta/beta inputs in Vc and Vs instead of the old fixed beta-only preliminary check. "
+        "Pile-cap one-way/punching shear remains a separate final-design check."
     )
+    aashto_theta_deg = 45.0
+    aashto_beta = 1.5
+    aashto_theta_beta_mode = "Conservative manual"
+    theta_beta_as_eff_mm2 = 0.0
+    if "AASHTO" in code_choice.upper():
+        aashto_theta_beta_mode = st.selectbox(
+            "AASHTO θ/β selection mode",
+            [
+                "Conservative manual",
+                "Project manual",
+                "Code-derived simplified RC estimate",
+            ],
+            index=0,
+            key="aashto_theta_beta_mode",
+            help="Use conservative manual for preliminary design, project manual when θ/β are justified externally, or code-derived estimate for nonprestressed RC sections.",
+        )
+        total_as_for_theta_beta = check.as_total_mm2 if check is not None else 0.0
+        if aashto_theta_beta_mode == "Conservative manual":
+            aashto_theta_deg = 45.0
+            aashto_beta = 1.5
+            st.info(
+                "Conservative default selected: θ = 45° and β = 1.5. "
+                "This generally reduces both stirrup contribution and concrete contribution compared with θ = 35°, β = 2.0."
+            )
+        elif aashto_theta_beta_mode == "Project manual":
+            aashto_cols = st.columns(2)
+            with aashto_cols[0]:
+                aashto_theta_deg = st.number_input(
+                    "AASHTO theta, θ (deg)",
+                    min_value=22.0,
+                    max_value=45.0,
+                    value=45.0,
+                    step=0.5,
+                    key="aashto_theta_deg",
+                    help="Inclination of diagonal compressive stress field. Use project LRFD procedure/table/calculation to justify final value.",
+                )
+            with aashto_cols[1]:
+                aashto_beta = st.number_input(
+                    "AASHTO beta, β",
+                    min_value=0.10,
+                    max_value=6.00,
+                    value=1.50,
+                    step=0.05,
+                    key="aashto_beta",
+                    help="Concrete shear factor used in Vc = 0.083 β sqrt(fc') bv dv. Final beta should come from the selected LRFD procedure.",
+                )
+        else:
+            as_cols = st.columns(2)
+            with as_cols[0]:
+                theta_beta_as_percent = st.number_input(
+                    "Effective longitudinal As for θ/β (% of total perimeter As)",
+                    min_value=10.0,
+                    max_value=100.0,
+                    value=50.0,
+                    step=5.0,
+                    key="theta_beta_as_percent",
+                    help="AASHTO strain equation needs longitudinal tension reinforcement As. For perimeter bars, 50% of total As is a practical preliminary estimate for one bending direction.",
+                )
+            with as_cols[1]:
+                theta_beta_as_eff_mm2 = max(total_as_for_theta_beta * theta_beta_as_percent / 100.0, 1.0)
+                st.metric("As used for θ/β derivation", f"{theta_beta_as_eff_mm2:,.0f} mm²")
+            st.warning(
+                "Code-derived mode is a simplified nonprestressed RC estimate. It uses Pu/Mu/Vu and effective longitudinal As. "
+                "It does not include prestress terms, torsion, detailed crack spacing for members without minimum shear reinforcement, or full AASHTO table iteration."
+            )
+        st.info(
+            "AASHTO shear formula used here: Vc = 0.083 β √fc' bv dv and, for vertical stirrups, "
+            "Vs = Av fy dv cot(θ) / s. In Code-derived mode the app estimates θ/β from longitudinal strain; "
+            "for final design, verify with the governing project AASHTO LRFD procedure."
+        )
+        with st.expander("What are θ and β in AASHTO shear design? / θ และ β คืออะไร", expanded=True):
+            st.markdown(
+                """
+                **θ (theta)** is the assumed angle of the diagonal concrete compression field / diagonal crack strut.
+                It controls the stirrup contribution through `cot(θ)` in `Vs = Av fy dv cot(θ) / s`.
+
+                - Smaller θ gives larger `cot(θ)` and therefore higher calculated `Vs` for the same stirrups.
+                - Larger θ gives lower `cot(θ)` and therefore requires more shear reinforcement.
+                - For final design, θ should be selected from the adopted AASHTO LRFD sectional shear procedure, not guessed.
+
+                **β (beta)** is the concrete shear factor used to estimate concrete contribution `Vc`.
+                It reflects the condition of the cracked concrete web, including strain/cracking effects in the LRFD method.
+
+                - Larger β gives larger `Vc`, so less stirrup steel may be required.
+                - Smaller β gives smaller `Vc`, so the design becomes more conservative.
+                - Final β should be justified from the project code procedure, table, or calculation sheet.
+
+                **Code-derived simplified RC estimate used by this app:**
+
+                `εs = (Mu/dv + 0.5Nu_tension + Vu) / (Es As)`
+
+                `θ = 29 + 3500 εs`
+
+                `β = 4.8 / (1 + 750 εs)`
+
+                This estimate is for nonprestressed RC sections and assumes minimum transverse reinforcement is provided.
+                Compression Pu in this app is converted to negative `Nu_tension` in the strain equation.
+
+                **Practical warning:** Do not increase β or reduce θ just to make the result pass.
+                If θ/β cannot be justified, use conservative project defaults and clearly state them in the report.
+                """
+            )
     shear_cols = st.columns(3)
     with shear_cols[0]:
         shear_tie_dia_mm = st.selectbox(
@@ -5856,6 +6144,12 @@ with tabs[3]:
             tie_dia_mm=float(shear_tie_dia_mm),
             tie_legs=int(shear_tie_legs),
             spacing_provided_mm=shear_spacing_provided_mm,
+            aashto_theta_deg=aashto_theta_deg,
+            aashto_beta=aashto_beta,
+            aashto_theta_beta_mode=aashto_theta_beta_mode,
+            mu_knm_for_theta_beta=resultant.design_mux_knm,
+            nu_kn_for_theta_beta=resultant.pu_kn,
+            as_longitudinal_mm2_for_theta_beta=theta_beta_as_eff_mm2 if theta_beta_as_eff_mm2 > 0 else (0.50 * check.as_total_mm2 if check is not None else 1.0),
         ),
         shear_check_summary(
             name="Strength section shear Vx",
@@ -5869,6 +6163,12 @@ with tabs[3]:
             tie_dia_mm=float(shear_tie_dia_mm),
             tie_legs=int(shear_tie_legs),
             spacing_provided_mm=shear_spacing_provided_mm,
+            aashto_theta_deg=aashto_theta_deg,
+            aashto_beta=aashto_beta,
+            aashto_theta_beta_mode=aashto_theta_beta_mode,
+            mu_knm_for_theta_beta=resultant.design_muy_knm,
+            nu_kn_for_theta_beta=resultant.pu_kn,
+            as_longitudinal_mm2_for_theta_beta=theta_beta_as_eff_mm2 if theta_beta_as_eff_mm2 > 0 else (0.50 * check.as_total_mm2 if check is not None else 1.0),
         ),
     ]
     if stem_design_result is not None:
@@ -5885,6 +6185,12 @@ with tabs[3]:
                 tie_dia_mm=float(shear_tie_dia_mm),
                 tie_legs=int(shear_tie_legs),
                 spacing_provided_mm=shear_spacing_provided_mm,
+                aashto_theta_deg=aashto_theta_deg,
+                aashto_beta=aashto_beta,
+                aashto_theta_beta_mode=aashto_theta_beta_mode,
+                mu_knm_for_theta_beta=stem_design_result.mu_kNm_per_m,
+                nu_kn_for_theta_beta=0.0,
+                as_longitudinal_mm2_for_theta_beta=max(stem_design_result.as_required_mm2_per_m, 1.0),
             )
         )
 
@@ -5894,6 +6200,7 @@ with tabs[3]:
                 "Check": item.name,
                 "Axis": item.axis,
                 "Status": item.status,
+                "θ / β": "-" if item.theta_deg <= 0 else f"{item.theta_deg:.1f} / {item.beta_factor:.2f}",
                 "Vu": f"{item.vu_kn:,.2f} kN",
                 "phi Vc": f"{item.phi_vc_kn:,.2f} kN",
                 "Vs req": f"{item.vs_required_kn:,.2f} kN",
@@ -5918,6 +6225,10 @@ with tabs[3]:
             detail_rows.extend(
                 [
                     [item.name, "code basis", item.code_basis, ""],
+                    [item.name, "shear method", item.shear_method, ""],
+                    [item.name, "theta / beta", "-" if item.theta_deg <= 0 else f"{item.theta_deg:.1f} deg / {item.beta_factor:.2f}", ""],
+                    [item.name, "longitudinal strain eps_s", "-" if item.theta_deg <= 0 else f"{item.longitudinal_strain:.6f}", ""],
+                    [item.name, "theta/beta basis", item.theta_beta_basis, ""],
                     [item.name, "section bw x d", f"{item.bw_mm:,.0f} x {item.d_mm:,.0f}", "mm"],
                     [item.name, "phi_v", f"{item.phi_v:.2f}", ""],
                     [item.name, "Vc nominal", f"{item.vc_kn:,.2f}", "kN"],
@@ -6060,10 +6371,16 @@ with tabs[4]:
         `Vx` uses the wall thickness as `bw` and the selected strength width direction as `d`.
 
         For Abutment mode, a separate `1 m` stem strip shear check is also reported from earth-pressure `Vy / Lx`.
-        ACI style uses a simplified `Vc = 0.17 sqrt(fc') bw d` with `phi_v = 0.75`. AASHTO style uses a simplified
-        preliminary `phi_v = 0.90` shear check and should be verified with the project AASHTO LRFD theta/beta method
-        for final design. Required shear reinforcement is reported as `Av/s`, with recommended spacing based on the
-        selected tie diameter and number of legs.
+        ACI style uses a simplified `Vc = 0.17 sqrt(fc') bw d` with `phi_v = 0.75`. AASHTO style now uses explicit
+        `theta` and `beta` inputs: `Vc = 0.083 beta sqrt(fc') bv dv` and, for vertical stirrups,
+        `Vs = Av fy dv cot(theta) / s` with `phi_v = 0.90`. Required shear reinforcement is reported as `Av/s`,
+        with recommended spacing based on the selected tie diameter and number of legs.
+
+        For AASHTO shear design, `theta` is the assumed diagonal compression-field angle; smaller `theta` increases
+        `cot(theta)` and increases the calculated stirrup contribution. `beta` is the concrete shear factor used in
+        `Vc`; larger `beta` increases the concrete contribution. Both values must be justified from the adopted
+        AASHTO LRFD sectional shear procedure or project design criteria. They are engineering design assumptions,
+        not calibration knobs to force the check to pass.
 
         The `Mu_x / Lx` value is a distributed line couple along the wall length. It is theoretically usable when the
         pile-cap analysis model accepts a wall-line moment/couple input. It is not a vertical line load in `kN/m`.
