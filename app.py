@@ -6142,12 +6142,16 @@ with tabs[4]:
     st.subheader("Lateral Transfer / Stability")
     st.caption(
         "This tab checks how total horizontal pile-cap forces are transferred. "
-        "It is separate from the Sectional Shear tab because these checks use Total Pu_x/Pu_y for pile-cap load transfer, "
-        "not only local one-way shear of the wall section."
+        "It uses the same full-width pile-cap base resultant as the Base Forces tab, not the selected local Flexure/PMM strip. "
+        "It is separate from the Sectional Shear tab because these checks use Total Pu_x/Pu_y for pile-cap load transfer."
     )
 
+    # Lateral Transfer must use the full pile-cap base resultant, not the selected
+    # local flexure/PMM design strip resultant.  Otherwise the values shown here
+    # will differ from the Base Forces tab whenever an effective strip is selected
+    # for Flexure.
     pilecap_totals = pilecap_resultant_totals(
-        resultant,
+        global_resultant,
         dead_load=dead_load_summary,
         backfill_vertical=backfill_vertical_result,
         approach_slab=approach_slab_result,
