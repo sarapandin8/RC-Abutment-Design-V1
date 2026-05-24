@@ -2728,31 +2728,35 @@ def _finish_view(
     show_zero_axes: bool = True,
 ) -> go.Figure:
     fig.update_layout(
-        title={"text": title, "x": 0.02, "xanchor": "left"},
+        title={"text": title, "x": 0.02, "xanchor": "left", "font": {"size": 14, "color": "#1e293b"}},
         height=480,
-        margin={"l": 24, "r": 24, "t": 54, "b": 24},
+        margin={"l": 16, "r": 16, "t": 40, "b": 16},
         paper_bgcolor="white",
-        plot_bgcolor="white",
+        plot_bgcolor="#f8fafc",
         showlegend=False,
-        font={"family": "Arial, sans-serif", "size": 13, "color": "#172033"},
+        font={"family": "Arial, sans-serif", "size": 11, "color": "#334155"},
     )
     fig.update_xaxes(
-        title=x_title,
+        title={"text": x_title, "standoff": 6, "font": {"size": 11}},
         showgrid=True,
-        gridcolor=COLORS["grid"],
+        gridcolor="#e2e8f0",
+        gridwidth=1,
         zeroline=show_zero_axes,
-        zerolinecolor="#111827",
+        zerolinecolor="#94a3b8",
         zerolinewidth=1,
+        tickfont={"size": 10},
     )
     fig.update_yaxes(
-        title=y_title,
+        title={"text": y_title, "standoff": 6, "font": {"size": 11}},
         showgrid=True,
-        gridcolor=COLORS["grid"],
+        gridcolor="#e2e8f0",
+        gridwidth=1,
         zeroline=show_zero_axes,
-        zerolinecolor="#111827",
+        zerolinecolor="#94a3b8",
         zerolinewidth=1,
         scaleanchor="x",
         scaleratio=1,
+        tickfont={"size": 10},
     )
     return fig
 
@@ -2841,12 +2845,12 @@ def plan_view(
     ]
     active_components = active_components or load_components[:3]
     row_block_height = load_line_gap * (len(active_components) + 1)
-    group_gap = max(150.0, load_line_gap * 1.25)
+    group_gap = max(120.0, load_line_gap * 1.0)
     for row_index, (row_y, rows) in enumerate(grouped_rows):
         x_positions = [float(row.get("x_mm", 0.0)) for row in rows]
         if not x_positions:
             continue
-        label_x = min(x_positions) - max(360.0, width_x_mm * 0.045)
+        label_x = min(x_positions) - max(280.0, width_x_mm * 0.035)
         row_prefixes = {
             "".join(ch for ch in str(row.get("name", "")) if not ch.isdigit()).strip()
             for row in rows
@@ -2908,7 +2912,7 @@ def plan_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(360.0, min(width_x_mm, depth_y_mm) * 0.24, bearing_plan_dim * 2.20)
+    dim_gap = max(280.0, min(width_x_mm, depth_y_mm) * 0.18, bearing_plan_dim * 1.80)
     x_centers = _unique_sorted_positions(bearing_records, "x_mm")
     y_centers = _unique_sorted_positions(bearing_records, "y_mm")
     right_dim_x = abut_x + dim_gap * (2.60 if len(y_centers) > 1 else 1.65)
@@ -2967,11 +2971,11 @@ def plan_view(
                 text_xshift=-7,
             )
 
-    axis_gap = max(850.0, max(width_x_mm, depth_y_mm) * 0.16)
+    axis_gap = max(420.0, max(width_x_mm, depth_y_mm) * 0.08)
     axis_origin_x = -pile_x - axis_gap
     axis_origin_y = -pile_y - axis_gap
-    arrow_x = min(max(width_x_mm * 0.18, 700.0), axis_gap * 0.95)
-    arrow_y = min(max(depth_y_mm * 0.55, 420.0), axis_gap * 0.95)
+    arrow_x = min(max(width_x_mm * 0.10, 400.0), axis_gap * 0.80)
+    arrow_y = min(max(depth_y_mm * 0.30, 280.0), axis_gap * 0.80)
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_y, dx=0, dy=arrow_y, label="+y", color=COLORS["axis_y"])
 
@@ -3108,8 +3112,8 @@ def front_view(
     ]
     load_line_gap = FRONT_VIEW_LOAD_TABLE_LINE_GAP_MM
     row_block_height = load_line_gap * (len(active_components) + 1)
-    group_gap = max(220.0, load_line_gap * 1.35)
-    table_clearance = max(260.0, load_line_gap * 1.15)
+    group_gap = max(160.0, load_line_gap * 1.0)
+    table_clearance = max(200.0, load_line_gap * 0.85)
     table_anchor_z = max(load_z_extents) + table_clearance
     load_text_xs: list[float] = []
     load_text_zs: list[float] = []
@@ -3117,7 +3121,7 @@ def front_view(
         x_positions = [float(row.get("x_mm", 0.0)) for row in rows]
         if not x_positions:
             continue
-        label_x = min(x_positions) - max(360.0, width_x_mm * 0.045)
+        label_x = min(x_positions) - max(280.0, width_x_mm * 0.035)
         row_prefixes = {
             "".join(ch for ch in str(row.get("name", "")) if not ch.isdigit()).strip()
             for row in rows
@@ -3170,8 +3174,8 @@ def front_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(360.0, min(width_x_mm, height_z_mm) * 0.12, bearing_display_dim * 2.00)
-    right_dim_x = abut_x + dim_gap * 1.65
+    dim_gap = max(280.0, min(width_x_mm, height_z_mm) * 0.10, bearing_display_dim * 1.60)
+    right_dim_x = abut_x + dim_gap * 1.35
     _add_dimension_line(
         fig,
         x0=right_dim_x,
@@ -3213,11 +3217,11 @@ def front_view(
         text_yshift=4,
     )
 
-    axis_gap = max(950.0, max(width_x_mm, height_z_mm) * 0.15)
+    axis_gap = max(450.0, max(width_x_mm, height_z_mm) * 0.08)
     axis_origin_x = -pile_x - axis_gap
     axis_origin_z = -pilecap_thickness_mm - axis_gap
-    arrow_x = min(max(width_x_mm * 0.18, 800.0), axis_gap * 0.95)
-    arrow_z = min(max(height_z_mm * 0.20, 700.0), axis_gap * 0.95)
+    arrow_x = min(max(width_x_mm * 0.10, 400.0), axis_gap * 0.80)
+    arrow_z = min(max(height_z_mm * 0.12, 400.0), axis_gap * 0.80)
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=arrow_x, dy=0, label="+x", color=COLORS["axis_x"])
     _add_axis_arrow(fig, x=axis_origin_x, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
@@ -3254,8 +3258,8 @@ def _add_side_earth_pressure_diagram(
     force_sign = 1.0 if earth_pressure.direction == "+y" else -1.0
     soil_side = -force_sign
     face_y = soil_side * abut_y
-    max_len = min(max(height_z_mm * 0.18, 360.0), max(620.0, pile_y * 0.58))
-    label_gap = max(300.0, max_len * 0.32)
+    max_len = min(max(height_z_mm * 0.15, 280.0), max(480.0, pile_y * 0.45))
+    label_gap = max(200.0, max_len * 0.28)
 
     p_soil_bottom = 2.0 * service_soil / earth_pressure.height_m
     p_other = service_other / earth_pressure.height_m
@@ -3699,21 +3703,21 @@ def side_view(
     ]
     load_line_gap = SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM
     row_block_height = load_line_gap * (len(active_components) + 1)
-    group_gap = max(220.0, load_line_gap * 1.35)
-    table_clearance = max(500.0, load_line_gap * 1.45)
+    group_gap = max(160.0, load_line_gap * 1.0)
+    table_clearance = max(400.0, load_line_gap * 1.2)
     table_anchor_z = max(load_z_extents) + table_clearance
     load_text_axis_xs: list[float] = []
     load_text_zs: list[float] = []
     for row_index, (row_y, rows) in enumerate(grouped_rows):
         if not rows:
             continue
-        column_gap = max(2200.0, SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM * 3.4, bearing_display_dim * 8.8)
+        column_gap = max(1800.0, SIDE_VIEW_LOAD_TABLE_LINE_GAP_MM * 2.8, bearing_display_dim * 7.0)
         table_span = column_gap * max(len(rows) - 1, 1)
         table_x_positions = [
             -table_span / 2.0 + index * column_gap
             for index in range(len(rows))
         ]
-        label_x = min(table_x_positions) - max(360.0, column_gap * 0.72)
+        label_x = min(table_x_positions) - max(280.0, column_gap * 0.60)
         row_prefixes = {
             "".join(ch for ch in str(row.get("name", "")) if not ch.isdigit()).strip()
             for row in rows
@@ -3766,8 +3770,8 @@ def side_view(
                     yanchor="middle",
                 )
 
-    dim_gap = max(360.0, min(depth_y_mm, height_z_mm) * 0.20, bearing_display_dim * 2.00)
-    right_dim_y = max(abut_y + dim_gap, max(load_y_extents) + dim_gap * 0.25)
+    dim_gap = max(280.0, min(depth_y_mm, height_z_mm) * 0.16, bearing_display_dim * 1.60)
+    right_dim_y = max(abut_y + dim_gap, max(load_y_extents) + dim_gap * 0.20)
     _add_dimension_line(
         fig,
         x0=right_dim_y,
@@ -3809,11 +3813,11 @@ def side_view(
         text_yshift=4,
     )
 
-    axis_gap = max(950.0, max(depth_y_mm, height_z_mm) * 0.15)
+    axis_gap = max(450.0, max(depth_y_mm, height_z_mm) * 0.08)
     axis_origin_y = -pile_y - axis_gap
     axis_origin_z = -pilecap_thickness_mm - axis_gap
-    arrow_y = min(max(depth_y_mm * 0.55, 500.0), axis_gap * 0.95)
-    arrow_z = min(max(height_z_mm * 0.20, 700.0), axis_gap * 0.95)
+    arrow_y = min(max(depth_y_mm * 0.30, 300.0), axis_gap * 0.80)
+    arrow_z = min(max(height_z_mm * 0.12, 400.0), axis_gap * 0.80)
     _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=arrow_y, dy=0, label="+y", color=COLORS["axis_y"])
     _add_axis_arrow(fig, x=axis_origin_y, y=axis_origin_z, dx=0, dy=arrow_z, label="+z", color=COLORS["axis_z"])
 
@@ -3826,7 +3830,7 @@ def side_view(
         max(max(load_z_extents) + pad * 0.45, max(load_text_zs) + pad * 0.18 if load_text_zs else max(load_z_extents) + pad),
     )
     fig = _finish_view(fig, "Side view", "y (mm)", "z (mm)", show_zero_axes=False)
-    fig.update_layout(height=720)
+    fig.update_layout(height=640)
     return fig
 
 
